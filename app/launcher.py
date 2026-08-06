@@ -8,6 +8,12 @@ from __future__ import annotations
 
 from app.runtime import Runtime
 
+from core.capability.browser.back import BackCapability
+from core.capability.browser.base import OpenUrlCapability
+from core.capability.browser.refresh import RefreshCapability
+from core.capability.file.create_folder import CreateFolderCapability
+from core.capability.file.delete import DeleteFileCapability
+from core.capability.file.rename import RenameFileCapability
 from core.container.service_registry import ServiceRegistry
 
 from core.capability.engine import CapabilityEngine
@@ -20,12 +26,28 @@ from core.planning.validator import Validator
 from core.planning.executor import Executor
 
 from core.ai.engine import AIEngine
-from core.ai.router import AIRouter
+from core.ai.router import IntentRouter
 from core.memory.manager import MemoryManager
 from core.conversation.manager import ConversationManager
 from core.plugins.manager import PluginManager
 from core.events.event_bus import EventBus
 from core.messaging.manager import MessagingManager
+from core.provider.manager import ProviderManager
+
+# =====================================================
+# AI COMPONENTS
+# =====================================================
+
+from core.ai.router import IntentRouter
+
+from core.ai.goal_builder import GoalBuilder
+
+from core.ai.response_builder import ResponseBuilder
+
+from core.ai.engine import AIEngine
+
+from core.provider.ollama import OllamaProvider
+
 
 
 class Launcher:
@@ -35,39 +57,100 @@ class Launcher:
     """
 
     def __init__(self) -> None:
+        """
+        Create the Webster launcher and instantiate every
+        long-lived subsystem.
 
-        self._initialized = False
+        Heavy initialization is performed later by start().
+        """
 
-        # -----------------------------
+        #
         # Runtime
-        # -----------------------------
+        #
 
-        self._runtime = Runtime()
+        self.runtime = Runtime()
 
-        # -----------------------------
-        # Core Registries / Managers
-        # -----------------------------
+        #
+        # Core Managers
+        #
 
-        self._services = ServiceRegistry()
-        self._capability_manager = CapabilityManager()
+        self.service_registry = ServiceRegistry()
 
-        self._planning_manager = PlanningManager()
+        self.provider_manager = ProviderManager()
 
-        # extra managers
-        self._events = EventBus()
+        self.plugin_manager = PluginManager()
 
-        self._memory_manager = MemoryManager(event_bus=self._events)
+        self.memory_manager = MemoryManager()
 
-        self._conversation_manager = ConversationManager(self._memory_manager, event_bus=self._events)
+        self.conversation_manager = ConversationManager()
 
-        self._ai_router = AIRouter()
+        self.messaging_manager = MessagingManager()
 
-        self._ai_engine = AIEngine(router=self._ai_router, event_bus=self._events)
+        self.event_bus = EventBus()
 
-        self._plugin_manager = PluginManager()
+        #
+        # AI Components
+        #
 
-        self._messaging = MessagingManager()
+        self.intent_router = IntentRouter()
 
+        self.goal_builder = GoalBuilder()
+
+        self.response_builder = ResponseBuilder()
+
+        #
+        # Core Engines
+        #
+
+        self.capability_engine = CapabilityEngine()
+
+        self.planning_engine = PlanningEngine()
+
+        self.ai_engine = AIEngine(
+
+            provider_manager=self.provider_manager,
+
+            planning_engine=self.planning_engine,
+
+            conversation_manager=self.conversation_manager,
+
+            memory_manager=self.memory_manager,
+
+            router=self.intent_router,
+
+            goal_builder=self.goal_builder,
+
+            response_builder=self.response_builder,
+
+        )
+
+        #
+        # Runtime Registration
+        #
+
+        self.runtime.services = self.service_registry
+
+        self.runtime.capability_engine = self.capability_engine
+
+        self.runtime.planning_engine = self.planning_engine
+
+        self.runtime.ai = self.ai_engine
+
+        self.runtime.memory = self.memory_manager
+
+        self.runtime.conversation = self.conversation_manager
+
+        self.runtime.plugins = self.plugin_manager
+
+        self.runtime.events = self.event_bus
+
+        self.runtime.messaging = self.messaging_manager
+
+        #
+        # State
+        #
+
+        self.running = False
     # =====================================================
     # Properties
     # =====================================================
@@ -92,411 +175,582 @@ class Launcher:
 
         return self._planning_manager
 
-    # =====================================================
+    # ---------------------------------------------------------
+    # Application
+    # ---------------------------------------------------------
+
+    @property
+    def application(self):
+
+        return self.runtime.application
+
+    # ---------------------------------------------------------
     # Initialization
-    # =====================================================
+    # ---------------------------------------------------------
 
-    def initialize(self) -> None:
+    def initialize(
+        self,
+    ) -> None:
         """
-        Initialize Webster.
+        Initialize every Webster subsystem.
+
+        This method is safe to call multiple times.
         """
 
-        if self._initialized:
+        if self.initialized:
+
             return
 
+        #
+        # Runtime
+        #
 
-        # create and register services and engines
-        self._initialize_services()
+        self.runtime.initialize()
 
-        self._initialize_capabilities()
+        #
+        # Core Managers
+        #
 
-        self._initialize_planning()
+        self.service_registry.initialize()
 
-        self._initialized = True
+        self.provider_manager.initialize()
 
-    # -----------------------------------------------------
+        self.plugin_manager.initialize()
 
-    def start(self) -> None:
+        self.memory_manager.initialize()
+
+        self.conversation_manager.initialize()
+
+        self.messaging_manager.initialize()
+
+        self.event_bus.initialize()
+
+        #
+        # Engines
+        #
+
+        self.capability_engine.initialize()
+
+        self.planning_engine.initialize()
+
+        self.ai_engine.initialize()
+
+        #
+        # Registration
+        #
+
+        self._register_services()
+
+        self._register_providers()
+
+        self._register_capabilities()
+
+        self._register_workflows()
+
+        self._register_providers()
+        
+        #
+        # Runtime References
+        #
+
+        self.runtime.services = self.service_registry
+
+        self.runtime.providers = self.provider_manager
+
+        self.runtime.capabilities = self.capability_engine
+
+        self.runtime.planning = self.planning_engine
+
+        self.runtime.ai = self.ai_engine
+
+        self.runtime.memory = self.memory_manager
+
+        self.runtime.conversation = self.conversation_manager
+
+        self.runtime.plugins = self.plugin_manager
+
+        self.runtime.events = self.event_bus
+
+        self.runtime.messaging = self.messaging_manager
+
+        #
+        # Status
+        #
+
+        self.initialized = True
+
+    # ---------------------------------------------------------
+    # Registration
+    # ---------------------------------------------------------
+
+    def _register_services(
+        self,
+    ) -> None:
+        """
+        Register all Webster services.
+        """
+
+        #
+        # Core Services
+        #
+
+        self.service_registry.register(
+
+            "provider_manager",
+
+            self.provider_manager,
+
+        )
+
+        self.service_registry.register(
+
+            "memory_manager",
+
+            self.memory_manager,
+
+        )
+
+        self.service_registry.register(
+
+            "conversation_manager",
+
+            self.conversation_manager,
+
+        )
+
+        self.service_registry.register(
+
+            "messaging_manager",
+
+            self.messaging_manager,
+
+        )
+
+        self.service_registry.register(
+
+            "plugin_manager",
+
+            self.plugin_manager,
+
+        )
+
+        self.service_registry.register(
+
+            "event_bus",
+
+            self.event_bus,
+
+        )
+
+        #
+        # Engines
+        #
+
+        self.service_registry.register(
+
+            "capability_engine",
+
+            self.capability_engine,
+
+        )
+
+        self.service_registry.register(
+
+            "planning_engine",
+
+            self.planning_engine,
+
+        )
+
+        self.service_registry.register(
+
+            "ai_engine",
+
+            self.ai_engine,
+
+        )
+
+    # ---------------------------------------------------------
+
+    def _register_providers(
+        self,
+    ) -> None:
+        """
+        Register all AI providers.
+        """
+
+        #
+        # Local Providers
+        #
+
+        self.provider_manager.register(
+
+            OllamaProvider(),
+
+        )
+
+        #
+        # Future Providers
+        #
+
+        # self.provider_manager.register(
+        #     GeminiProvider(...)
+        # )
+
+        # self.provider_manager.register(
+        #     OpenAIProvider(...)
+        # )
+
+    # ---------------------------------------------------------
+
+    def _register_capabilities(
+        self,
+    ) -> None:
+        """
+        Register all capabilities.
+        """
+
+        #
+        # Browser
+        #
+
+        self.capability_engine.register(
+            OpenUrlCapability()
+        )
+
+        self.capability_engine.register(
+            RefreshCapability()
+        )
+
+        self.capability_engine.register(
+            BackCapability()
+        )
+
+        #
+        # File
+        #
+
+        self.capability_engine.register(
+            CreateFolderCapability()
+        )
+
+        self.capability_engine.register(
+            DeleteFileCapability()
+        )
+
+        self.capability_engine.register(
+            RenameFileCapability()
+        )
+
+        #
+        # System
+        #
+
+        # self.capability_engine.register(
+        #     ShutdownCapability()
+        # )
+
+        # self.capability_engine.register(
+        #     RestartCapability()
+        # )
+
+    # ---------------------------------------------------------
+
+    def _register_workflows(
+        self,
+    ) -> None:
+        """
+        Register Webster workflows.
+        """
+
+        #
+        # Reserved for Sprint 36+
+        #
+
+        pass
+
+    # ---------------------------------------------------------
+    # Lifecycle
+    # ---------------------------------------------------------
+
+    def start(
+        self,
+    ) -> None:
         """
         Start Webster.
         """
 
-        print("Starting Webster...")
+        if self.running:
 
-        self.initialize()
+            return
 
-        print("Webster initialized successfully.")
+        if not self.initialized:
 
-    # =====================================================
-    # Internal Initialization
-    # =====================================================
+            self.initialize()
 
-    def _initialize_capabilities(self) -> None:
-        """
-        Initialize the capability subsystem.
-        """
+        #
+        # Runtime
+        #
 
-        capability_engine = CapabilityEngine(
-            manager=self.capability_manager,
-            event_bus=self._events,
-        )
+        self.runtime.start()
 
-        # populate runtime
-        self.runtime.capability_engine = capability_engine
+        #
+        # Managers
+        #
 
-        # register engine as a service
-        if self.runtime.services is not None:
-            self.runtime.services.register(
-                "capability_engine",
-                capability_engine,
-                description="Capability Engine",
-            )
+        self.provider_manager.initialize()
 
-        # Discover and register capability packs from core.capability.packs
-        try:
-            import pkgutil
-            import importlib
+        self.memory_manager.initialize()
 
-            from core.capability.packs.pack import CapabilityPack
-            import core.capability.packs as packs_pkg
+        self.conversation_manager.initialize()
 
-            for finder, name, ispkg in pkgutil.iter_modules(packs_pkg.__path__):
-                try:
-                    module_name = f"{packs_pkg.__name__}.{name}"
-                    module = importlib.import_module(module_name)
+        self.messaging_manager.initialize()
 
-                    for attr_name in dir(module):
-                        attr = getattr(module, attr_name)
+        self.plugin_manager.initialize()
 
-                        try:
-                            if isinstance(attr, type) and issubclass(attr, CapabilityPack) and attr is not CapabilityPack:
-                                pack = attr()
+        #
+        # Engines
+        #
 
-                                if pack.enabled:
-                                    try:
-                                        capability_engine.discover_and_register(pack.register)
-                                    except Exception:
-                                        # fallback: call register directly on manager
-                                        try:
-                                            pack.register(self.capability_manager.registry)
-                                        except Exception:
-                                            pass
-                        except Exception:
-                            continue
-                except Exception:
-                    continue
-        except Exception:
-            # capability pack discovery is best-effort; ignore failures
-            pass
+        self.capability_engine.initialize()
 
-    # -----------------------------------------------------
+        self.planning_engine.initialize()
 
-    def _initialize_planning(self) -> None:
-        """
-        Initialize the planning subsystem.
-        """
+        self.ai_engine.initialize()
 
+        #
+        # Status
+        #
 
-        # Build planner/validator/executor/analyzer/decomposer with DI
-        planner = Planner(self.capability_manager.registry)
+        self.running = True
 
-        validator = Validator(self.capability_manager.registry)
+    # ---------------------------------------------------------
 
-        executor = Executor(self.runtime.capabilities)
-
-        from core.planning.analyzer import GoalAnalyzer
-
-        from core.planning.decomposer import TaskDecomposer
-
-        analyzer = GoalAnalyzer()
-
-        decomposer = TaskDecomposer()
-
-        planning_engine = PlanningEngine(
-            capability_engine=self.runtime.capabilities,
-            manager=self.planning_manager,
-            planner=planner,
-            validator=validator,
-            executor=executor,
-            analyzer=analyzer,
-            decomposer=decomposer,
-            event_bus=self._events,
-        )
-
-        self.runtime.planning_engine = planning_engine
-
-        # register
-        if self.runtime.services is not None:
-            self.runtime.services.register(
-                "planning_engine",
-                planning_engine,
-                description="Planning Engine",
-            )
-            # register analyzer and decomposer services
-            self.runtime.services.register(
-                "goal_analyzer",
-                analyzer,
-                description="Goal Analyzer",
-            )
-
-            self.runtime.services.register(
-                "task_decomposer",
-                decomposer,
-                description="Task Decomposer",
-            )
-
-    # =====================================================
-    # Shutdown
-    # =====================================================
-
-    def shutdown(self) -> None:
+    def shutdown(
+        self,
+    ) -> None:
         """
         Shutdown Webster.
         """
 
-        if not self._initialized:
+        if not self.running:
+
             return
 
-        self._shutdown_planning()
+        #
+        # AI
+        #
 
-        self._shutdown_capabilities()
+        self.ai_engine.shutdown()
 
-        # clear services
-        if self.runtime.services is not None:
-            self.runtime.services.unregister("planning_engine")
-            self.runtime.services.unregister("capability_engine")
-            self.runtime.services.unregister("ai_engine")
+        #
+        # Engines
+        #
 
-        self.runtime.ai = None
-        self.runtime.planning_engine = None
-        self.runtime.capability_engine = None
+        self.planning_engine.shutdown()
 
-        self._initialized = False
+        self.capability_engine.shutdown()
 
-    # -----------------------------------------------------
+        #
+        # Managers
+        #
 
-    def _shutdown_planning(self) -> None:
+        self.provider_manager.shutdown()
+
+        self.plugin_manager.shutdown()
+
+        self.messaging_manager.shutdown()
+
+        self.conversation_manager.shutdown()
+
+        self.memory_manager.shutdown()
+
+        #
+        # Runtime
+        #
+
+        self.runtime.shutdown()
+
+        #
+        # Status
+        #
+
+        self.running = False
+
+    # ---------------------------------------------------------
+
+    def restart(
+        self,
+    ) -> None:
         """
-        Shutdown the planning subsystem.
+        Restart Webster.
         """
 
-        self.runtime.planning_engine = None
+        self.shutdown()
 
-    # -----------------------------------------------------
+        self.start()
 
-    def _shutdown_capabilities(self) -> None:
-        """
-        Shutdown the capability subsystem.
-        """
-
-        self.runtime.capability_engine = None
-
-        if self.runtime.services is not None:
-            self.runtime.services.unregister("ai_engine")
-
-    # -----------------------------------------------------
-
-    def _initialize_services(self) -> None:
-        """
-        Initialize the central service registry and populate runtime.
-        """
-
-        self.runtime.services = self._services
-
-        # register the registry itself
-        self.runtime.services.register(
-            "service_registry",
-            self._services,
-            description="Central service registry",
-        )
-        # register additional core services
-        self.runtime.services.register("memory_manager", self._memory_manager, description="Memory Manager")
-        self.runtime.services.register("conversation_manager", self._conversation_manager, description="Conversation Manager")
-        self.runtime.services.register("ai_engine", self._ai_engine, description="AI Engine")
-        self.runtime.services.register("plugin_manager", self._plugin_manager, description="Plugin Manager")
-        self.runtime.services.register("event_bus", self._events, description="Event Bus")
-        self.runtime.services.register("messaging", self._messaging, description="Messaging Manager")
-
-        # populate runtime shortcuts
-        self.runtime.memory = self._memory_manager
-        self.runtime.conversation = self._conversation_manager
-        self.runtime.ai = self._ai_engine
-        self.runtime.plugins = self._plugin_manager
-        self.runtime.events = self._events
-        self.runtime.messaging = self._messaging
-
-    # =====================================================
-    # Runtime Statistics
-    # =====================================================
+    # ---------------------------------------------------------
 
     @property
-    def component_count(self) -> int:
-        """
-        Total registered components.
-        """
+    def is_running(
+        self,
+    ) -> bool:
 
-        return 0
-
-    # -----------------------------------------------------
+        return self.running
 
     @property
-    def service_count(self) -> int:
+    def is_initialized(
+        self,
+    ) -> bool:
+
+        return self.initialized
+
+    # ---------------------------------------------------------
+    # Health
+    # ---------------------------------------------------------
+
+    def health(
+        self,
+    ) -> dict:
         """
-        Total registered services.
-        """
-
-        return 0
-
-    # -----------------------------------------------------
-
-    @property
-    def provider_count(self) -> int:
-        """
-        Total registered providers.
-        """
-
-        if self._ai_router is None:
-            return 0
-
-        return self._ai_router.count
-
-    # -----------------------------------------------------
-
-    @property
-    def capability_count(self) -> int:
-        """
-        Total registered capabilities.
-        """
-
-        engine = self.runtime.capabilities
-
-        if engine is None:
-            return 0
-
-        if hasattr(engine, "count"):
-            return engine.count
-
-        if hasattr(engine, "capability_count"):
-            return engine.capability_count
-
-        if hasattr(engine, "manager"):
-
-            manager = engine.manager
-
-            if hasattr(manager, "count"):
-                return manager.count
-
-        return 0
-
-    # -----------------------------------------------------
-
-    @property
-    def workflow_count(self) -> int:
-        """
-        Total active workflows.
-        """
-
-        planning = self.runtime.planning
-
-        if planning is None:
-            return 0
-
-        if hasattr(planning, "workflow_count"):
-            return planning.workflow_count
-
-        if hasattr(planning, "manager"):
-
-            manager = planning.manager
-
-            if hasattr(manager, "workflow_count"):
-                return manager.workflow_count
-
-        return 0
-
-    # -----------------------------------------------------
-
-    @property
-    def plan_count(self) -> int:
-        """
-        Total active plans.
-        """
-
-        planning = self.runtime.planning
-
-        if planning is None:
-            return 0
-
-        if hasattr(planning, "plan_count"):
-            return planning.plan_count
-
-        if hasattr(planning, "manager"):
-
-            manager = planning.manager
-
-            if hasattr(manager, "plan_count"):
-                return manager.plan_count
-
-        return 0
-
-    # =====================================================
-    # Runtime Status
-    # =====================================================
-
-    @property
-    def ready(self) -> bool:
-        """
-        Returns True when Webster is ready.
-        """
-
-        return (
-            self.initialized
-            and self.runtime.capabilities is not None
-            and self.runtime.planning is not None
-            and self.runtime.ai is not None
-            and self.runtime.events is not None
-        )
-
-    # -----------------------------------------------------
-
-    def health(self) -> dict:
-        """
-        Returns launcher health information.
+        Return the overall health of Webster.
         """
 
         return {
 
             "initialized": self.initialized,
 
-            "ready": self.ready,
+            "running": self.running,
 
-            "runtime": {
+            "runtime": self.runtime.health(),
 
-                "components": self.component_count,
+            "providers": self.provider_manager.health(),
 
-                "services": self.service_count,
+            "planning": self.planning_engine.health(),
 
-                "providers": self.provider_count,
+            "capabilities": self.capability_engine.health(),
 
-                "capabilities": self.capability_count,
+            "memory": self.memory_manager.health(),
 
-                "ai": self.runtime.ai.health() if self.runtime.ai is not None else None,
+            "conversation": self.conversation_manager.health(),
 
-                "memory": {
-                    "count": self.runtime.memory.count if self.runtime.memory is not None else 0,
-                    "active": self.runtime.memory.active if self.runtime.memory is not None else 0,
-                    "archived": self.runtime.memory.archived if self.runtime.memory is not None else 0,
-                },
+            "services": self.service_registry.health(),
 
-                "events": self.runtime.events.subscriber_count if self.runtime.events is not None else 0,
-
-            },
-
-            "planning": {
-
-                "plans": self.plan_count,
-
-                "workflows": self.workflow_count,
-
-            },
+            "plugins": self.plugin_manager.health(),
 
         }
+
+    # ---------------------------------------------------------
+    # Statistics
+    # ---------------------------------------------------------
+
+    @property
+    def service_count(
+        self,
+    ) -> int:
+
+        return self.service_registry.service_count
+
+    @property
+    def provider_count(
+        self,
+    ) -> int:
+
+        return self.provider_manager.provider_count
+
+    @property
+    def capability_count(
+        self,
+    ) -> int:
+
+        return self.capability_engine.capability_count
+
+    @property
+    def workflow_count(
+        self,
+    ) -> int:
+
+        return self.planning_engine.workflow_count
+
+    @property
+    def component_count(
+        self,
+    ) -> int:
+
+        return (
+
+            self.service_count
+
+            + self.provider_count
+
+            + self.capability_count
+
+            + self.workflow_count
+
+        )
+
+    # ---------------------------------------------------------
+    # Runtime Access
+    # ---------------------------------------------------------
+
+    @property
+    def ai(
+        self,
+    ):
+
+        return self.ai_engine
+
+    @property
+    def planner(
+        self,
+    ):
+
+        return self.planning_engine
+
+    @property
+    def capabilities(
+        self,
+    ):
+
+        return self.capability_engine
+
+    @property
+    def providers(
+        self,
+    ):
+
+        return self.provider_manager
+
+    @property
+    def services(
+        self,
+    ):
+
+        return self.service_registry
+
+    # ---------------------------------------------------------
+    # Representation
+    # ---------------------------------------------------------
+
+    def __repr__(
+        self,
+    ) -> str:
+
+        return (
+
+            "Launcher("
+
+            f"running={self.running}, "
+
+            f"initialized={self.initialized}, "
+
+            f"services={self.service_count}, "
+
+            f"providers={self.provider_count}, "
+
+            f"capabilities={self.capability_count}"
+
+            ")"
+
+        )

@@ -1,9 +1,7 @@
 """
 Webster Alpha
 
-AI Engine
-
-Central orchestration layer for all AI interactions.
+Artificial Intelligence Engine
 """
 
 from __future__ import annotations
@@ -12,59 +10,107 @@ from core.ai.request import AIRequest
 from core.ai.response import AIResponse
 
 from core.ai.router import IntentRouter
+
 from core.ai.goal_builder import GoalBuilder
+
 from core.ai.response_builder import ResponseBuilder
 
 from core.provider.manager import ProviderManager
 
 from core.planning.engine import PlanningEngine
 
-from core.conversation.manager import ConversationManager
+from core.capability.engine import CapabilityEngine
 
 from core.memory.manager import MemoryManager
+
+from core.conversation.manager import ConversationManager
 
 
 class AIEngine:
     """
-    Coordinates every AI interaction inside Webster.
+    Webster's central intelligence engine.
 
-    This class never talks directly to the operating system.
+    Responsibilities
+    ----------------
 
-    It decides whether a request should
+    • Receive user requests
 
-    • generate a conversational response
+    • Detect intent
 
-    • execute a plan
+    • Decide AI vs Capability execution
 
-    • invoke capabilities
+    • Invoke planning
 
-    and returns a natural language reply.
+    • Execute capabilities
+
+    • Talk to AI providers
+
+    • Store conversation
+
+    • Build responses
     """
+
+    # ---------------------------------------------------------
+    # Construction
+    # ---------------------------------------------------------
 
     def __init__(
         self,
         provider_manager: ProviderManager,
         planning_engine: PlanningEngine,
-        conversation_manager: ConversationManager,
+        capability_engine: CapabilityEngine,
         memory_manager: MemoryManager,
+        conversation_manager: ConversationManager,
         router: IntentRouter,
         goal_builder: GoalBuilder,
         response_builder: ResponseBuilder,
     ) -> None:
 
-        self._providers = provider_manager
+        self.provider_manager = provider_manager
 
-        self._planning = planning_engine
+        self.planning_engine = planning_engine
 
-        self._conversation = conversation_manager
+        self.capability_engine = capability_engine
 
-        self._memory = memory_manager
+        self.memory_manager = memory_manager
 
-        self._router = router
+        self.conversation_manager = conversation_manager
 
-        self._goal_builder = goal_builder
+        self.router = router
 
-        self._response_builder = response_builder
+        self.goal_builder = goal_builder
+
+        self.response_builder = response_builder
+
+        self.initialized = False
+
+    # ---------------------------------------------------------
+    # Initialization
+    # ---------------------------------------------------------
+
+    def initialize(
+        self,
+    ) -> None:
+        """
+        Initialize the AI engine.
+        """
+
+        if self.initialized:
+
+            return
+
+        self.initialized = True
+
+    # ---------------------------------------------------------
+
+    def shutdown(
+        self,
+    ) -> None:
+        """
+        Shutdown the AI engine.
+        """
+
+        self.initialized = False
 
     # ---------------------------------------------------------
     # Public API
@@ -75,20 +121,14 @@ class AIEngine:
         message: str,
     ) -> str:
         """
-        Primary entry point for Webster.
-
-        Returns a natural language response.
+        Main AI entry point.
         """
 
-        request = AIRequest(
+        response = self.process(
 
-            prompt=message,
-
-            context=self._conversation.context,
+            message
 
         )
-
-        response = self.process(request)
 
         return response.text
 
@@ -96,98 +136,15 @@ class AIEngine:
 
     def process(
         self,
-        request: AIRequest,
+        message: str,
     ) -> AIResponse:
         """
-        Process an AI request.
+        Process a user message.
+
+        Full implementation follows in Part 2.
         """
 
-        request.validate()
-
-        self._conversation.add_user_message(
-            request.prompt
-        )
-
-        intent = self._router.route(
-            request.prompt
-        )
-
-        if intent.is_action:
-
-            return self._execute_action(
-                request,
-                intent,
-            )
-
-        return self._generate_chat(
-            request
-        )
-
-    # ---------------------------------------------------------
-
-    def _generate_chat(
-        self,
-        request: AIRequest,
-    ) -> AIResponse:
-
-        provider = self._providers.default_provider
-
-        response = provider.generate(
-            request
-        )
-
-        self._conversation.add_assistant_message(
-            response.text
-        )
-
-        return response
-
-    # ---------------------------------------------------------
-
-    def _execute_action(
-        self,
-        request: AIRequest,
-        intent,
-    ) -> AIResponse:
-
-        goal = self._goal_builder.build(
-            request.prompt,
-            intent,
-        )
-
-        result = self._planning.execute_goal(
-            goal
-        )
-
-        text = self._response_builder.build(
-            result
-        )
-
-        response = AIResponse(
-            text=text
-        )
-
-        self._conversation.add_assistant_message(
-            response.text
-        )
-
-        return response
-
-    # ---------------------------------------------------------
-
-    @property
-    def planning_engine(
-        self,
-    ) -> PlanningEngine:
-
-        return self._planning
-
-    @property
-    def provider_manager(
-        self,
-    ) -> ProviderManager:
-
-        return self._providers
+        raise NotImplementedError
 
     # ---------------------------------------------------------
 
@@ -197,14 +154,214 @@ class AIEngine:
 
         return {
 
-            "healthy": True,
+            "healthy": self.initialized,
 
-            "providers": self._providers.health(),
+            "provider_manager": self.provider_manager.health(),
 
-            "planning": self._planning.health(),
+            "planning_engine": self.planning_engine.health(),
 
-            "conversation": True,
+            "capability_engine": self.capability_engine.health(),
 
-            "memory": True,
+            "conversation_manager": self.conversation_manager.health(),
+
+            "memory_manager": self.memory_manager.health(),
 
         }
+
+    # ---------------------------------------------------------
+
+    def __repr__(
+        self,
+    ) -> str:
+
+        return (
+
+            "AIEngine("
+
+            f"initialized={self.initialized}"
+
+            ")"
+
+        )
+
+    # ---------------------------------------------------------
+    # Processing
+    # ---------------------------------------------------------
+
+    def process(
+        self,
+        message: str,
+    ) -> AIResponse:
+        """
+        Process a user request.
+        """
+
+        #
+        # Validation
+        #
+
+        message = message.strip()
+
+        if not message:
+
+            return AIResponse.error(
+
+                "Message cannot be empty."
+
+            )
+
+        #
+        # Store User Message
+        #
+
+        self.conversation_manager.add_user_message(
+
+            message
+
+        )
+
+        #
+        # Determine Intent
+        #
+
+        intent = self.router.route(
+
+            message
+
+        )
+
+        #
+        # Conversation Request
+        #
+
+        if intent.is_conversation:
+
+            request = AIRequest(
+
+                prompt=message,
+
+                context=self.conversation_manager.context,
+
+            )
+
+            response = self.provider_manager.generate(
+
+                request
+
+            )
+
+        #
+        # Capability Request
+        #
+
+        else:
+
+            goal = self.goal_builder.build(
+
+                message,
+
+                intent,
+
+            )
+
+            plan = self.planning_engine.create_plan(
+
+                goal
+
+            )
+
+            capability_result = (
+
+                self.capability_engine.execute(
+
+                    plan
+
+                )
+
+            )
+
+            response = self.response_builder.build(
+
+                capability_result
+
+            )
+
+        #
+        # Save Conversation
+        #
+
+        self.conversation_manager.add_assistant_message(
+
+            response.text
+
+        )
+
+        #
+        # Store Memory
+        #
+
+        self.memory_manager.store(
+
+            message=message,
+
+            response=response.text,
+
+        )
+
+        return response
+
+    # ---------------------------------------------------------
+    # Streaming
+    # ---------------------------------------------------------
+
+    def stream(
+        self,
+        message: str,
+    ):
+        """
+        Stream an AI response.
+        """
+
+        request = AIRequest(
+
+            prompt=message,
+
+            context=self.conversation_manager.context,
+
+            stream=True,
+
+        )
+
+        yield from self.provider_manager.stream(
+
+            request
+
+        )
+
+    # ---------------------------------------------------------
+    # Helpers
+    # ---------------------------------------------------------
+
+    def ask(
+        self,
+        prompt: str,
+    ) -> str:
+
+        return self.chat(
+
+            prompt
+
+        )
+
+    # ---------------------------------------------------------
+
+    def execute(
+        self,
+        command: str,
+    ) -> AIResponse:
+
+        return self.process(
+
+            command
+
+        )

@@ -1,68 +1,174 @@
 """
-Webster V2 Entry Point
+Webster Alpha
+
+Main Entry Point
 """
 
 from __future__ import annotations
-
-import sys
 
 from app.launcher import Launcher
 
 
 def main() -> None:
     """
-    Start Webster.
+    Webster entry point.
     """
+
     launcher = Launcher()
 
     try:
+
+        print()
+
+        print("=" * 60)
+
+        print("Starting Webster Alpha...")
+
+        print("=" * 60)
+
+        print()
+
         launcher.start()
 
-        if sys.stdin.isatty():
-            print()
-            print("WEBSTER CHAT MODE")
-            print("Type 'exit' or 'quit' to stop.")
-            print()
+        application = launcher.application
 
-            while True:
-                try:
-                    prompt = input("webster> ")
-                except EOFError:
-                    break
+        print("Webster initialized successfully.")
 
-                command = prompt.strip()
+        print()
 
-                if not command:
-                    continue
+        print("WEBSTER CHAT MODE")
 
-                if command.lower() in {"exit", "quit", "q"}:
-                    break
+        print("Type 'help' for commands.")
 
-                if command.lower() in {"status", "status help", "help status"}:
-                    print("Available status commands: status, status health, status ready, status initialized")
-                    continue
+        print("Type 'exit' or 'quit' to stop.")
 
-                if command.lower() == "status":
-                    print("Webster is running and ready." if launcher.ready else "Webster is initialized." if launcher.initialized else "Webster is not initialized.")
-                    continue
+        print()
 
-                if command.lower() == "status health":
-                    print(launcher.health())
-                    continue
+        while True:
 
-                if command.lower() == "status ready":
-                    print(f"ready={launcher.ready}")
-                    continue
+            command = input("webster> ").strip()
 
-                if command.lower() == "status initialized":
-                    print(f"initialized={launcher.initialized}")
-                    continue
+            if not command:
 
-                print(f"You entered: {command}")
+                continue
+
+            lower = command.lower()
+
+            #
+            # Exit
+            #
+
+            if lower in ("exit", "quit"):
+
+                break
+
+            #
+            # Help
+            #
+
+            if lower == "help":
+
+                print()
+
+                print("Commands")
+
+                print("--------")
+
+                print("help")
+
+                print("status")
+
+                print("health")
+
+                print("restart")
+
+                print("exit")
+
+                print()
+
+                continue
+
+            #
+            # Status
+            #
+
+            if lower == "status":
+
+                print()
+
+                print(application.status())
+
+                print()
+
+                continue
+
+            #
+            # Health
+            #
+
+            if lower == "health":
+
+                print()
+
+                print(application.health())
+
+                print()
+
+                continue
+
+            #
+            # Restart
+            #
+
+            if lower == "restart":
+
+                print()
+
+                print("Restarting Webster...")
+
+                application.restart()
+
+                print("Restart complete.")
+
+                print()
+
+                continue
+
+            #
+            # AI
+            #
+
+            try:
+
+                response = application.chat(
+
+                    command
+
+                )
+
+                print()
+
+                print(response)
+
+                print()
+
+            except Exception as exc:
+
+                print()
+
+                print(f"Error: {exc}")
+
+                print()
 
     finally:
+
         launcher.shutdown()
+
+        print()
+
+        print("Goodbye.")
 
 
 if __name__ == "__main__":
+
     main()

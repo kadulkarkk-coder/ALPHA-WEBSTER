@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import webbrowser
 
-from core.capability.browser.base import BrowserCapability
+
 from core.capability.request import CapabilityRequest
 from core.capability.result import CapabilityResult
 from core.capability.types import (

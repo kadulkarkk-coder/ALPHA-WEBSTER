@@ -1,5 +1,5 @@
 """
-WEBSTER ALPHA
+Webster Alpha
 
 Application
 """
@@ -8,301 +8,175 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from app.launcher import Launcher
 from app.runtime import Runtime
-
-from core.status.status_manager import StatusManager
-from core.state.state_manager import StateManager
-from core.ai.request import AIRequest
-from core.messaging.message import Message
-from core.capability.request import CapabilityRequest
-from core.capability.result import CapabilityResult
-from core.planning.goal import Goal
-from core.memory.types import MemoryType
 
 
 class Application:
     """
-    Main Webster application.
+    Webster Application.
 
-    This class provides the public API for
-    interacting with the Webster runtime.
+    This class exposes the public API for the
+    entire Webster platform.
+
+    The console, GUI, voice assistant, REST API,
+    mobile app, and plugins should interact only
+    with this class.
     """
 
-    VERSION = "0.1.0-alpha"
+    VERSION = "0.1.0"
 
-    def __init__(self) -> None:
+    # ---------------------------------------------------------
+    # Construction
+    # ---------------------------------------------------------
 
-        self._launcher = Launcher()
-
-        self._runtime = self._launcher.runtime
-
-        self._state = StateManager()
-
-        self._status = StatusManager()
-
-        self._running = False
-
-        self._started = datetime.now()
-
-    # =====================================================
-    # Properties
-    # =====================================================
-
-    @property
-    def launcher(self) -> Launcher:
-        return self._launcher
-
-    @property
-    def runtime(self) -> Runtime:
-        return self._runtime
-
-    @property
-    def state(self) -> StateManager:
-        return self._state
-
-    @property
-    def status(self) -> StatusManager:
-        return self._status
-
-    @property
-    def running(self) -> bool:
-        return self._running
-
-    @running.setter
-    def running(
+    def __init__(
         self,
-        value: bool,
+        runtime: Runtime,
     ) -> None:
-
-        self._running = value
-
-    @property
-    def started(self) -> datetime:
-        return self._started
-
-    # =====================================================
-    # Runtime Services
-    # =====================================================
-
-    @property
-    def capabilities(self):
         """
-        Webster Capability Engine.
+        Create the Webster application.
         """
 
-        return self.runtime.capabilities
+        self.runtime = runtime
 
-    @property
-    def planning(self):
-        """
-        Webster Planning Engine.
-        """
+        self.started = datetime.now()
 
-        return self.runtime.planning
+        self.running = False
 
-    # =====================================================
-    # State
-    # =====================================================
+    # ---------------------------------------------------------
+    # Initialization
+    # ---------------------------------------------------------
 
-    @property
-    def initialized(self) -> bool:
-        """
-        Returns True if Webster has been initialized.
-        """
-
-        return self.launcher.initialized
-
-    @property
-    def ready(self) -> bool:
-        """
-        Returns True if Webster is ready.
-        """
-
-        return self.launcher.ready
-
-    # =====================================================
-    # Lifecycle
-    # =====================================================
-
-    def initialize(self) -> None:
+    def initialize(
+        self,
+    ) -> None:
         """
         Initialize Webster.
         """
 
-        self.launcher.initialize()
+        if self.running:
 
-    # -----------------------------------------------------
+            return
 
-    def start(self) -> None:
+        self.runtime.initialize()
+
+    # ---------------------------------------------------------
+    # Lifecycle
+    # ---------------------------------------------------------
+
+    def start(
+        self,
+    ) -> None:
         """
         Start Webster.
         """
 
         if self.running:
+
             return
 
         self.initialize()
 
+        self.runtime.start()
+
         self.running = True
 
-        self.status.set_running(True)
+    # ---------------------------------------------------------
 
-    # -----------------------------------------------------
-
-    def shutdown(self) -> None:
-        """Alias for stop/shutdown all subsystems."""
-
-        self.stop()
-
-    # =====================================================
-    # High-level APIs
-    # =====================================================
-
-    def chat(self, prompt: str) -> object:
-        """Send a chat prompt through conversation -> AI -> response.
-
-        Returns the AIResponse.
-        """
-
-        if not self.running:
-            self.start()
-
-        conv = self.runtime.conversation
-
-        ai = self.runtime.ai
-
-        if conv is None or ai is None:
-            raise RuntimeError("Conversation or AI subsystem not available.")
-
-        msg = Message(sender="user", receiver="ai", payload=prompt)
-
-        conv.receive(msg)
-
-        context = conv.build_context()
-
-        request = AIRequest(prompt=prompt, context=context)
-
-        return ai.generate(request)
-
-    def plan_goal(self, goal: str | Goal) -> object:
-        """Generate a plan for a goal without executing it."""
-
-        if not self.running:
-            self.start()
-
-        planning = self.runtime.planning
-
-        if planning is None:
-            raise RuntimeError("Planning subsystem not available.")
-
-        return planning.plan_goal(goal)
-
-    def execute_goal(self, goal: str | Goal):
-        """Execute a goal via the planning engine."""
-
-        if not self.running:
-            self.start()
-
-        planning = self.runtime.planning
-
-        if planning is None:
-            raise RuntimeError("Planning subsystem not available.")
-
-        return planning.execute_goal(goal)
-
-    def execute_capability(self, capability_action: str, **kwargs) -> CapabilityResult:
-        """Execute a capability by string like 'browser.open_url' and keyword args."""
-
-        if not self.running:
-            self.start()
-
-        cap_engine = self.runtime.capabilities
-
-        if cap_engine is None:
-            raise RuntimeError("Capability subsystem not available.")
-
-        if "." in capability_action:
-            capability, action = capability_action.split(".", 1)
-        else:
-            capability = capability_action
-            action = "run"
-
-        step = __import__("core.planning.step", fromlist=["PlanStep"]).PlanStep(capability=capability, arguments=kwargs)
-
-        req = CapabilityRequest(capability=capability, action=action, step=step, arguments=kwargs)
-
-        return cap_engine.execute(req)
-
-    def execute_workflow(self, workflow_name: str) -> list:
-        """Execute a workflow (by name) through PlanningEngine."""
-
-        if not self.running:
-            self.start()
-
-        planning_engine = self.runtime.planning
-
-        if planning_engine is None:
-            raise RuntimeError("Planning subsystem not available.")
-
-        return planning_engine.execute_workflow(workflow_name)
-
-    def remember_intent(self, topic: str, value: str, source: str = "user", confidence: float = 1.0) -> None:
-        """Store an intent or contextual memory entry."""
-
-        if self.runtime.memory is None:
-            raise RuntimeError("Memory subsystem not available.")
-
-        self.runtime.memory.remember(
-            memory_type=MemoryType.GOAL,
-            topic=topic,
-            value=value,
-            source=source,
-            confidence=confidence,
-        )
-
-    def get_conversation_context(self) -> object:
-        """Fetch the current conversation context."""
-
-        if self.runtime.conversation is None:
-            raise RuntimeError("Conversation subsystem not available.")
-
-        return self.runtime.conversation.build_context()
-
-    # -----------------------------------------------------
-
-    def stop(self) -> None:
+    def shutdown(
+        self,
+    ) -> None:
         """
         Shutdown Webster.
         """
 
         if not self.running:
+
             return
+
+        self.runtime.shutdown()
 
         self.running = False
 
-        self.status.set_running(False)
+    # ---------------------------------------------------------
 
-        self.launcher.shutdown()
-
-    # -----------------------------------------------------
-
-    def restart(self) -> None:
+    def restart(
+        self,
+    ) -> None:
         """
         Restart Webster.
         """
 
-        self.stop()
+        self.shutdown()
 
         self.start()
 
-    # =====================================================
-    # Diagnostics
-    # =====================================================
+    # ---------------------------------------------------------
+    # AI
+    # ---------------------------------------------------------
 
-    def health(self) -> dict:
+    def chat(
+        self,
+        message: str,
+    ) -> str:
         """
-        Returns the current health status of Webster.
+        Send a message to Webster.
+        """
+
+        return self.runtime.ai.chat(
+            message
+        )
+
+    # ---------------------------------------------------------
+
+    def execute(
+        self,
+        command: str,
+    ):
+        """
+        Execute a natural language command.
+        """
+
+        return self.runtime.ai.chat(
+            command
+        )
+
+    # ---------------------------------------------------------
+    # Status
+    # ---------------------------------------------------------
+
+    def status(
+        self,
+    ) -> dict:
+        """
+        Return the current runtime status.
+        """
+
+        return {
+
+            "running": self.running,
+
+            "started": self.started,
+
+            "version": self.VERSION,
+
+            "healthy": self.runtime.health().get(
+
+                "healthy",
+
+                True,
+
+            ),
+
+        }
+
+    # ---------------------------------------------------------
+
+    def health(
+        self,
+    ) -> dict:
+        """
+        Return complete application health.
         """
 
         return {
@@ -313,67 +187,115 @@ class Application:
 
                 "started": self.started,
 
-                "healthy": self.running,
-
                 "version": self.VERSION,
 
             },
 
-            "runtime": {
-
-                "initialized": self.initialized,
-
-                "ready": self.ready,
-
-                "components": self.launcher.component_count,
-
-                "services": self.launcher.service_count,
-
-                "providers": self.launcher.provider_count,
-
-                "capabilities": self.launcher.capability_count,
-
-                "ai": self.runtime.ai.health() if self.runtime.ai is not None else None,
-
-                "memory": {
-                    "count": self.runtime.memory.count if self.runtime.memory is not None else 0,
-                    "active": self.runtime.memory.active if self.runtime.memory is not None else 0,
-                    "archived": self.runtime.memory.archived if self.runtime.memory is not None else 0,
-                },
-
-            },
-
-            "planning": {
-
-                "plans": self.launcher.plan_count,
-
-                "workflows": self.launcher.workflow_count,
-
-                "goals": self.launcher.planning_manager.goal_count,
-
-                "tasks": self.launcher.planning_manager.task_count,
-
-            },
+            "runtime": self.runtime.health(),
 
         }
 
-    # -----------------------------------------------------
+    # ---------------------------------------------------------
+    # Convenience Properties
+    # ---------------------------------------------------------
 
     @property
-    def is_running(self) -> bool:
-        """
-        Returns True if Webster is running.
-        """
+    def ai(
+        self,
+    ):
 
-        return self.running
+        return self.runtime.ai
 
-    # -----------------------------------------------------
+    @property
+    def planner(
+        self,
+    ):
 
-    def __repr__(self) -> str:
+        return self.runtime.planning
+
+    @property
+    def capabilities(
+        self,
+    ):
+
+        return self.runtime.capabilities
+
+    @property
+    def providers(
+        self,
+    ):
+
+        return self.runtime.providers
+
+    @property
+    def memory(
+        self,
+    ):
+
+        return self.runtime.memory
+
+    @property
+    def conversation(
+        self,
+    ):
+
+        return self.runtime.conversation
+
+    @property
+    def services(
+        self,
+    ):
+
+        return self.runtime.services
+
+    # ---------------------------------------------------------
+    # Statistics
+    # ---------------------------------------------------------
+
+    @property
+    def component_count(
+        self,
+    ) -> int:
+
+        return self.runtime.component_count
+
+    @property
+    def provider_count(
+        self,
+    ) -> int:
+
+        return self.runtime.provider_count
+
+    @property
+    def capability_count(
+        self,
+    ) -> int:
+
+        return self.runtime.capability_count
+
+    @property
+    def workflow_count(
+        self,
+    ) -> int:
+
+        return self.runtime.workflow_count
+
+    # ---------------------------------------------------------
+    # Representation
+    # ---------------------------------------------------------
+
+    def __repr__(
+        self,
+    ) -> str:
 
         return (
-            f"{self.__class__.__name__}"
-            f"(version={self.VERSION!r}, "
+
+            "Application("
+
             f"running={self.running}, "
-            f"ready={self.ready})"
+
+            f"version='{self.VERSION}'"
+
+            ")"
+
         )
