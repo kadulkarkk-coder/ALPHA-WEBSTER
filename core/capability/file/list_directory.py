@@ -1,101 +1,48 @@
-"""
-Webster Alpha
-
-List Directory Capability
-"""
+"""Webster Alpha - List Directory Capability."""
 
 from __future__ import annotations
 
 from core.capability.file.base import FileSystemCapability
+from core.capability.file.manager_adapter import FileManagerAdapter
 from core.capability.request import CapabilityRequest
 from core.capability.result import CapabilityResult
-from core.capability.types import (
-    CapabilityCategory,
-    CapabilityPermission,
-    CapabilityType,
-)
+from core.capability.types import CapabilityCategory, CapabilityPermission, CapabilityType
+from core.file.manager import FileManager
 
 
 class ListDirectoryCapability(FileSystemCapability):
-    """
-    Lists the contents of a directory.
-    """
+    """Lists a directory through the shared FileManager."""
 
-    def __init__(self) -> None:
-
+    def __init__(self, file_manager: FileManager | None = None) -> None:
         super().__init__(
             name="list_directory",
             capability_type=CapabilityType.FILE,
             category=CapabilityCategory.SYSTEM,
-            permissions=(
-                CapabilityPermission.FILE_SYSTEM,
-            ),
+            permissions=(CapabilityPermission.FILE_SYSTEM,),
         )
+        self._files = FileManagerAdapter(file_manager or FileManager())
 
-    def execute(
-        self,
-        request: CapabilityRequest,
-    ) -> CapabilityResult:
-
+    def execute(self, request: CapabilityRequest) -> CapabilityResult:
         try:
-
             directory = self.get_path(request)
-
-            self.ensure_directory(directory)
-
-            recursive = self.get_boolean(
-                request,
-                "recursive",
-                False,
-            )
-
-            include_hidden = self.get_boolean(
-                request,
-                "include_hidden",
-                False,
-            )
-
-            items = []
-
-            iterator = (
-                directory.rglob("*")
-                if recursive
-                else directory.iterdir()
-            )
-
-            for item in iterator:
-
-                if (
-                    not include_hidden
-                    and item.name.startswith(".")
-                ):
+            recursive = self.get_boolean(request, "recursive", False)
+            include_hidden = self.get_boolean(request, "include_hidden", False)
+            items = self._files.list(directory)
+            if recursive:
+                paths = self._files.search(directory, "*")
+                items = [self._files.manager.info(p) for p in paths]
+            output = []
+            for info in items:
+                if not include_hidden and info.path.name.startswith("."):
                     continue
-
-                items.append(
-                    {
-                        "name": item.name,
-                        "path": str(item),
-                        "type": (
-                            "directory"
-                            if item.is_dir()
-                            else "file"
-                        ),
-                        "size": (
-                            item.stat().st_size
-                            if item.is_file()
-                            else None
-                        ),
-                    }
-                )
-
+                output.append({
+                    "name": info.path.name,
+                    "path": str(info.path),
+                    "type": "directory" if info.is_directory else "file",
+                    "size": info.size if info.is_file else None,
+                })
             return CapabilityResult.success_result(
-                output=items,
-                path=str(directory),
-                count=len(items),
+                output=output, path=str(directory), count=len(output)
             )
-
         except Exception as error:
-
-            return CapabilityResult.failure_result(
-                error=str(error),
-            )
+            return CapabilityResult.failure_result(error=str(error))
