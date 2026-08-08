@@ -15,249 +15,156 @@ from core.memory.manager import MemoryManager
 from core.plugins.manager import PluginManager
 from core.events.event_bus import EventBus
 from core.messaging.manager import MessagingManager
-
-
+from core.provider.manager import ProviderManager
 
 
 class Runtime:
-    """
-    Stores every long-lived runtime subsystem
-    used by Webster.
-    """
+    """Stores every long-lived Webster runtime subsystem."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+    ) -> None:
 
         self._services: ServiceRegistry | None = None
-
+        self._provider: ProviderManager | None = None
         self._capability_engine: CapabilityEngine | None = None
-
         self._planning_engine: PlanningEngine | None = None
-
         self._ai: AIEngine | None = None
-
         self._memory: MemoryManager | None = None
-
         self._conversation: ConversationManager | None = None
-
         self._plugins: PluginManager | None = None
-
         self._events: EventBus | None = None
-
         self._messaging: MessagingManager | None = None
-
+        self._application = None
         self._initialized = False
-
         self._running = False
 
     # =====================================================
-    # Capability Engine
-    # =====================================================
-
-    @property
-    def capability_engine(self) -> CapabilityEngine | None:
-
-        return self._capability_engine
-
-    @capability_engine.setter
-    def capability_engine(
-        self,
-        engine: CapabilityEngine | None,
-    ) -> None:
-
-        self._capability_engine = engine
-
-    # =====================================================
-    # Planning Engine
-    # =====================================================
-
-    @property
-    def planning_engine(self) -> PlanningEngine | None:
-
-        return self._planning_engine
-
-    @planning_engine.setter
-    def planning_engine(
-        self,
-        engine: PlanningEngine | None,
-    ) -> None:
-
-        self._planning_engine = engine
-
-    # =====================================================
-    # Convenience Aliases
-    # =====================================================
-
-    @property
-    def capabilities(self) -> CapabilityEngine | None:
-
-        return self._capability_engine
-
-    @property
-    def planning(self) -> PlanningEngine | None:
-
-        return self._planning_engine
-
-    # =====================================================
-    # Service Registry
+    # Subsystem Access
     # =====================================================
 
     @property
     def services(self) -> ServiceRegistry | None:
-
         return self._services
 
     @services.setter
-    def services(self, registry: ServiceRegistry | None) -> None:
+    def services(self, value: ServiceRegistry | None) -> None:
+        self._services = value
 
-        self._services = registry
+    @property
+    def provider(self) -> ProviderManager | None:
+        return self._provider
 
-    # =====================================================
-    # AI
-    # =====================================================
+    @provider.setter
+    def provider(self, value: ProviderManager | None) -> None:
+        self._provider = value
+
+    @property
+    def capability_engine(self) -> CapabilityEngine | None:
+        return self._capability_engine
+
+    @capability_engine.setter
+    def capability_engine(self, value: CapabilityEngine | None) -> None:
+        self._capability_engine = value
+
+    @property
+    def capabilities(self) -> CapabilityEngine | None:
+        return self._capability_engine
+
+    @property
+    def planning_engine(self) -> PlanningEngine | None:
+        return self._planning_engine
+
+    @planning_engine.setter
+    def planning_engine(self, value: PlanningEngine | None) -> None:
+        self._planning_engine = value
+
+    @property
+    def planning(self) -> PlanningEngine | None:
+        return self._planning_engine
 
     @property
     def ai(self) -> AIEngine | None:
-
         return self._ai
 
     @ai.setter
-    def ai(self, engine: AIEngine | None) -> None:
-
-        self._ai = engine
+    def ai(self, value: AIEngine | None) -> None:
+        self._ai = value
 
     @property
     def ai_engine(self) -> AIEngine | None:
-
         return self._ai
 
     @ai_engine.setter
-    def ai_engine(self, engine: AIEngine | None) -> None:
-
-        self._ai = engine
-
-    # =====================================================
-    # Memory
-    # =====================================================
+    def ai_engine(self, value: AIEngine | None) -> None:
+        self._ai = value
 
     @property
     def memory(self) -> MemoryManager | None:
-
         return self._memory
 
     @memory.setter
-    def memory(self, manager: MemoryManager | None) -> None:
-
-        self._memory = manager
-
-    # =====================================================
-    # Conversation
-    # =====================================================
+    def memory(self, value: MemoryManager | None) -> None:
+        self._memory = value
 
     @property
     def conversation(self) -> ConversationManager | None:
-
         return self._conversation
 
     @conversation.setter
-    def conversation(self, manager: ConversationManager | None) -> None:
-
-        self._conversation = manager
-
-    # =====================================================
-    # Plugins
-    # =====================================================
+    def conversation(self, value: ConversationManager | None) -> None:
+        self._conversation = value
 
     @property
     def plugins(self) -> PluginManager | None:
-
         return self._plugins
 
     @plugins.setter
-    def plugins(self, manager: PluginManager | None) -> None:
-
-        self._plugins = manager
-
-    # =====================================================
-    # Events
-    # =====================================================
+    def plugins(self, value: PluginManager | None) -> None:
+        self._plugins = value
 
     @property
     def events(self) -> EventBus | None:
-
         return self._events
 
     @events.setter
-    def events(self, bus: EventBus | None) -> None:
-
-        self._events = bus
-
-    # =====================================================
-    # Messaging
-    # =====================================================
+    def events(self, value: EventBus | None) -> None:
+        self._events = value
 
     @property
     def messaging(self) -> MessagingManager | None:
-
         return self._messaging
 
     @messaging.setter
-    def messaging(self, manager: MessagingManager | None) -> None:
+    def messaging(self, value: MessagingManager | None) -> None:
+        self._messaging = value
 
-        self._messaging = manager
+    @property
+    def application(self):
+        return self._application
+
+    @application.setter
+    def application(self, value) -> None:
+        self._application = value
 
     # =====================================================
-    # Runtime State
+    # State
     # =====================================================
 
     @property
     def initialized(self) -> bool:
-        """
-        Returns True when all required runtime
-        services are available.
-        """
-
-        return (
-            self._services is not None
-            and self._capability_engine is not None
-            and self._planning_engine is not None
-            and self._ai is not None
-            and self._initialized is not None
-            and self._memory is not None
-            and self._conversation is not None
-            and self._events is not None
-            and self._messaging is not None
-            and self._plugins is not None
-        )
-
-    # -----------------------------------------------------
+        return self._initialized
 
     @property
-    def running(
-        self,
-    ) -> bool:
-
+    def running(self) -> bool:
         return self._running
 
-    # -----------------------------------------------------
+    @property
+    def ready(self) -> bool:
+        return self._initialized and self._running
 
     @property
-    def ready(
-        self,
-    ) -> bool:
-
-        return (
-
-            self._initialized
-
-            and self._running
-
-        )
-
-    @property
-    def is_healthy(
-        self,
-    ) -> bool:
-
+    def is_healthy(self) -> bool:
         return self.ready
 
     # =====================================================
@@ -267,148 +174,102 @@ class Runtime:
     def initialize(
         self,
     ) -> None:
-        """
-        Initialize the Webster runtime container.
-
-        Runtime initialization prepares the runtime itself.
-        Individual subsystems are initialized by Launcher.
-        """
+        """Initialize the runtime container itself."""
 
         if self._initialized:
-
             return
 
-        #
-        # Ensure the runtime state exists.
-        #
-
-        if not hasattr(
-            self,
-            "services",
-        ):
-
-            self.services = None
-
-        if not hasattr(
-            self,
-            "provider",
-        ):
-
-            self.provider = None
-
-        if not hasattr(
-            self,
-            "memory",
-        ):
-
-            self.memory = None
-
-        if not hasattr(
-            self,
-            "conversation",
-        ):
-
-            self.conversation = None
-
-        if not hasattr(
-            self,
-            "plugins",
-        ):
-
-            self.plugins = None
-
-        if not hasattr(
-            self,
-            "events",
-        ):
-
-            self.events = None
-
-        if not hasattr(
-            self,
-            "messaging",
-        ):
-
-            self.messaging = None
-
-        if not hasattr(
-            self,
-            "capability_engine",
-        ):
-
-            self.capability_engine = None
-
-        if not hasattr(
-            self,
-            "planning_engine",
-        ):
-
-            self.planning_engine = None
-
-        if not hasattr(
-            self,
-            "ai",
-        ):
-
-            self.ai = None
-
         self._initialized = True
-
-    # -----------------------------------------------------
 
     def start(
         self,
     ) -> None:
-        """
-        Start the Webster runtime.
-        """
+        """Start the runtime container."""
 
         if self._running:
-
             return
 
         if not self._initialized:
-
             self.initialize()
 
         self._running = True
 
-    # -----------------------------------------------------
-
     def shutdown(
         self,
     ) -> None:
-        """
-        Stop the Webster runtime.
-
-        Runtime shutdown only changes runtime state.
-        Individual subsystems are shut down by Launcher.
-        """
+        """Stop the runtime container."""
 
         if not self._running:
-
             return
 
         self._running = False
 
-
-
-    
-    # -----------------------------------------------------
-
-    def clear(self) -> None:
-        """
-        Clears every runtime subsystem.
-        """
+    def clear(
+        self,
+    ) -> None:
+        """Clear runtime references."""
 
         self._planning_engine = None
-
         self._capability_engine = None
+        self._ai = None
+        self._memory = None
+        self._conversation = None
+        self._plugins = None
+        self._events = None
+        self._messaging = None
+        self._provider = None
 
         if self._services is not None:
             self._services.clear()
 
         self._services = None
+        self._application = None
+        self._initialized = False
+        self._running = False
+
+    # =====================================================
+    # Statistics
+    # =====================================================
+
+    @property
+    def provider_count(self) -> int:
+        return (
+            self._provider.provider_count
+            if self._provider is not None
+            else 0
+        )
+
+    @property
+    def capability_count(self) -> int:
+        if self._capability_engine is None:
+            return 0
+
+        try:
+            return self._capability_engine.capability_count()
+        except Exception:
+            return 0
+
+    @property
+    def workflow_count(self) -> int:
+        if self._planning_engine is None:
+            return 0
+
+        return self._planning_engine.workflow_count
+
+    @property
+    def component_count(self) -> int:
+        return (
+            (1 if self._services is not None else 0)
+            + (1 if self._provider is not None else 0)
+            + (1 if self._capability_engine is not None else 0)
+            + (1 if self._planning_engine is not None else 0)
+            + (1 if self._ai is not None else 0)
+            + (1 if self._memory is not None else 0)
+            + (1 if self._conversation is not None else 0)
+            + (1 if self._plugins is not None else 0)
+            + (1 if self._events is not None else 0)
+            + (1 if self._messaging is not None else 0)
+        )
 
     # =====================================================
     # Health
@@ -417,60 +278,33 @@ class Runtime:
     def health(
         self,
     ) -> dict:
-        """
-        Return the current runtime health.
-        """
 
         components = {
-
             "services": self.services is not None,
-
             "provider": self.provider is not None,
-
             "memory": self.memory is not None,
-
-            "conversation": (
-                self.conversation is not None
-            ),
-
+            "conversation": self.conversation is not None,
             "plugins": self.plugins is not None,
-
             "events": self.events is not None,
-
-            "messaging": (
-                self.messaging is not None
-            ),
-
-            "capabilities": (
-                self.capability_engine is not None
-            ),
-
-            "planning": (
-                self.planning_engine is not None
-            ),
-
+            "messaging": self.messaging is not None,
+            "capabilities": self.capability_engine is not None,
+            "planning": self.planning_engine is not None,
             "ai": self.ai is not None,
-
         }
 
         return {
-
             "initialized": self._initialized,
-
             "running": self._running,
-
             "healthy": self.ready,
-
             "components": components,
-
         }
 
-    # -----------------------------------------------------
-
-    def __repr__(self) -> str:
+    def __repr__(
+        self,
+    ) -> str:
 
         return (
             f"{self.__class__.__name__}"
-            f"(initialized={self.initialized})"
+            f"(initialized={self._initialized}, "
+            f"running={self._running})"
         )
-
