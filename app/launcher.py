@@ -12,7 +12,7 @@ from core.capability.browser.back import BackCapability
 from core.capability.browser.open_url import OpenUrlCapability
 from core.capability.browser.refresh import RefreshCapability
 from core.capability.file.create_folder import CreateFolderCapability
-from core.capability.file.delete import DeleteFileCapability
+from core.capability.file.delete_file import DeleteFileCapability
 from core.capability.file.rename import RenameFileCapability
 from core.capability.registry import CapabilityRegistry
 from core.container.service_registry import ServiceRegistry
@@ -36,83 +36,42 @@ from core.events.event_bus import EventBus
 from core.messaging.manager import MessagingManager
 from core.provider.ollama import OllamaProvider
 from core.provider.manager import ProviderManager
+from core.voice.manager import VoiceManager
 
 
 class Launcher:
-    """
-    Responsible for constructing and bootstrapping
-    every Webster runtime subsystem.
-    """
+    """Responsible for constructing and bootstrapping Webster."""
 
-    def __init__(
-        self,
-    ) -> None:
-        """
-        Construct every long-lived Webster object.
-
-        Objects are CREATED here only.
-        Registration and initialization happen
-        inside initialize().
-        """
+    def __init__(self) -> None:
+        """Construct every long-lived Webster object."""
 
         self._initialized = False
         self._running = False
-
         self._runtime = Runtime()
-        self._application = None
 
         self.event_bus = EventBus()
         self.service_registry = ServiceRegistry()
         self.plugin_manager = PluginManager()
         self.messaging_manager = MessagingManager()
-
-        self.memory_manager = MemoryManager(
-            event_bus=self.event_bus,
-        )
-
+        self.memory_manager = MemoryManager(event_bus=self.event_bus)
         self.conversation_manager = ConversationManager(
             memory=self.memory_manager,
             event_bus=self.event_bus,
         )
 
-        # =====================================================
-        # Capability System
-        # =====================================================
-
         self.capability_registry = CapabilityRegistry()
-
-        self.capability_manager = CapabilityManager(
-            registry=self.capability_registry,
-        )
-
+        self.capability_manager = CapabilityManager(registry=self.capability_registry)
         self.capability_engine = CapabilityEngine(
             registry=self.capability_registry,
             manager=self.capability_manager,
             event_bus=self.event_bus,
         )
 
-        # The planner and validator must use the SAME registry
-        # that receives the actual runtime capabilities.
         self.plan_registry = self.capability_registry
-
-        # =====================================================
-        # Planning System
-        # =====================================================
-
         self.planning_manager = PlanningManager()
-
-        self._planner = Planner(
-            registry=self.plan_registry,
-        )
-
-        self.validator = Validator(
-            registry=self.plan_registry,
-        )
-
-        self.executor = Executor(
-            capability_engine=self.capability_engine,
-        )
-
+        self._planner = Planner(registry=self.plan_registry)
+        self.validator = Validator(registry=self.plan_registry)
+        self.executor = Executor(capability_engine=self.capability_engine)
         self.goal_analyzer = GoalAnalyzer()
         self.task_decomposer = TaskDecomposer()
 
@@ -128,17 +87,8 @@ class Launcher:
             registry=self.plan_registry,
         )
 
-        # =====================================================
-        # Provider System
-        # =====================================================
-
         self.provider_manager = ProviderManager()
         self.provider = OllamaProvider()
-
-        # =====================================================
-        # AI Components
-        # =====================================================
-
         self.intent_router = IntentRouter()
         self.goal_builder = GoalBuilder()
         self.response_builder = ResponseBuilder()
@@ -154,9 +104,8 @@ class Launcher:
             response_builder=self.response_builder,
         )
 
-        # =====================================================
-        # Runtime Wiring
-        # =====================================================
+        # Voice subsystem
+        self.voice_manager = VoiceManager()
 
         self._runtime.ai = self.ai_engine
         self._runtime.memory = self.memory_manager
@@ -167,21 +116,15 @@ class Launcher:
         self._runtime.events = self.event_bus
         self._runtime.messaging = self.messaging_manager
         self._runtime.services = self.service_registry
+        self._runtime.provider = self.provider_manager
+        self._runtime.voice = self.voice_manager
 
-    # =====================================================
-    # Initialization
-    # =====================================================
-
-    def initialize(
-        self,
-    ) -> None:
+    def initialize(self) -> None:
         """Initialize Webster exactly once."""
-
         if self._initialized:
             return
 
         self._runtime.initialize()
-
         self.service_registry.initialize()
         self.provider_manager.initialize()
         self.plugin_manager.initialize()
@@ -189,9 +132,8 @@ class Launcher:
         self.conversation_manager.initialize()
         self.messaging_manager.initialize()
         self.event_bus.initialize()
+        self.voice_manager.initialize()
 
-        # Register dependencies BEFORE initializing systems that
-        # consume their registries.
         self._register_services()
         self._register_providers()
         self._register_capabilities()
@@ -201,7 +143,11 @@ class Launcher:
         self.planning_engine.initialize()
         self.ai_engine.initialize()
 
+        # 36.7: voice transcripts are processed by the same AI engine as text chat.
+        self.voice_manager.set_processor(self.ai_engine.chat)
+
         self._runtime.services = self.service_registry
+        self._runtime.provider = self.provider_manager
         self._runtime.memory = self.memory_manager
         self._runtime.conversation = self.conversation_manager
         self._runtime.plugins = self.plugin_manager
@@ -210,159 +156,78 @@ class Launcher:
         self._runtime.capability_engine = self.capability_engine
         self._runtime.planning_engine = self.planning_engine
         self._runtime.ai = self.ai_engine
+        self._runtime.voice = self.voice_manager
 
-        if getattr(
-            self._runtime,
-            "application",
-            None,
-        ) is None:
-
+        if self._runtime.application is None:
             from app.application import Application
-
-            self.application = Application(
-                runtime=self._runtime,
-            )
+            self._runtime.application = Application(runtime=self._runtime)
 
         self._initialized = True
 
-    # =====================================================
-    # Registration
-    # =====================================================
-
-    def _register_services(
-        self,
-    ) -> None:
+    def _register_services(self) -> None:
         """Register all Webster services."""
+        self.service_registry.register("provider_manager", self.provider_manager)
+        self.service_registry.register("memory_manager", self.memory_manager)
+        self.service_registry.register("conversation_manager", self.conversation_manager)
+        self.service_registry.register("capability_engine", self.capability_engine)
+        self.service_registry.register("planning_engine", self.planning_engine)
+        self.service_registry.register("ai_engine", self.ai_engine)
+        self.service_registry.register("plugin_manager", self.plugin_manager)
+        self.service_registry.register("event_bus", self.event_bus)
+        self.service_registry.register("messaging_manager", self.messaging_manager)
+        self.service_registry.register("voice_manager", self.voice_manager)
 
-        self.service_registry.register(
-            "provider_manager",
-            self.provider_manager,
-        )
-
-        self.service_registry.register(
-            "memory_manager",
-            self.memory_manager,
-        )
-
-        self.service_registry.register(
-            "conversation_manager",
-            self.conversation_manager,
-        )
-
-        self.service_registry.register(
-            "capability_engine",
-            self.capability_engine,
-        )
-
-        self.service_registry.register(
-            "planning_engine",
-            self.planning_engine,
-        )
-
-        self.service_registry.register(
-            "ai_engine",
-            self.ai_engine,
-        )
-
-        self.service_registry.register(
-            "plugin_manager",
-            self.plugin_manager,
-        )
-
-        self.service_registry.register(
-            "event_bus",
-            self.event_bus,
-        )
-
-        self.service_registry.register(
-            "messaging_manager",
-            self.messaging_manager,
-        )
-
-    # -----------------------------------------------------
-
-    def _register_providers(
-        self,
-    ) -> None:
+    def _register_providers(self) -> None:
         """Register AI providers."""
+        if not self.provider_manager.has(self.provider.name):
+            self.provider_manager.register(self.provider)
+        self.provider_manager.set_default(self.provider.name)
 
-        # Use the long-lived provider created in __init__.
-        self.provider_manager.register(
-            self.provider,
-        )
-
-        self.provider_manager.set_default(
-            self.provider.name,
-        )
-
-    # -----------------------------------------------------
-
-    def _register_capabilities(
-        self,
-    ) -> None:
+    def _register_capabilities(self) -> None:
         """Register all currently implemented capabilities."""
+        self.capability_engine.register(OpenUrlCapability())
+        self.capability_engine.register(RefreshCapability())
+        self.capability_engine.register(BackCapability())
+        self.capability_engine.register(CreateFolderCapability())
+        self.capability_engine.register(DeleteFileCapability())
+        self.capability_engine.register(RenameFileCapability())
 
-        self.capability_engine.register(
-            OpenUrlCapability()
-        )
-
-        self.capability_engine.register(
-            RefreshCapability()
-        )
-
-        self.capability_engine.register(
-            BackCapability()
-        )
-
-        self.capability_engine.register(
-            CreateFolderCapability()
-        )
-
-        self.capability_engine.register(
-            DeleteFileCapability()
-        )
-
-        self.capability_engine.register(
-            RenameFileCapability()
-        )
-
-    # -----------------------------------------------------
-
-    def _register_workflows(
-        self,
-    ) -> None:
+    def _register_workflows(self) -> None:
         """Register Webster workflows."""
-
         pass
 
-    # =====================================================
-    # Lifecycle
-    # =====================================================
-
-    def start(
-        self,
-    ) -> None:
-        """Start Webster."""
-
+    def start(self) -> None:
+        """Start Webster and its public Application."""
         if self._running:
             return
-
         if not self._initialized:
             self.initialize()
 
         self._runtime.start()
+        self.voice_manager.start()
+
+        application = self._runtime.application
+        if application is not None and not application.running:
+            application.start()
+
         self._running = True
 
-    # -----------------------------------------------------
+    def voice_chat_once(self) -> str | None:
+        """Listen for one spoken request and answer it aloud."""
+        if not self._running:
+            self.start()
+        return self.voice_manager.converse_once()
 
-    def shutdown(
-        self,
-    ) -> None:
-        """Shutdown Webster."""
-
+    def shutdown(self) -> None:
+        """Shutdown Webster cleanly."""
         if not self._running:
             return
 
+        application = self._runtime.application
+        if application is not None and application.running:
+            application.shutdown()
+
+        self.voice_manager.shutdown()
         self.ai_engine.shutdown()
         self.planning_engine.shutdown()
         self.capability_engine.shutdown()
@@ -372,46 +237,23 @@ class Launcher:
         self.conversation_manager.shutdown()
         self.memory_manager.shutdown()
         self._runtime.shutdown()
-
         self._running = False
 
-    # -----------------------------------------------------
-
-    def restart(
-        self,
-    ) -> None:
+    def restart(self) -> None:
         """Restart Webster."""
-
         self.shutdown()
         self.start()
 
-    # =====================================================
-    # State
-    # =====================================================
-
     @property
-    def is_running(
-        self,
-    ) -> bool:
-
+    def is_running(self) -> bool:
         return self._running
 
     @property
-    def is_initialized(
-        self,
-    ) -> bool:
-
+    def is_initialized(self) -> bool:
         return self._initialized
 
-    # =====================================================
-    # Health
-    # =====================================================
-
-    def health(
-        self,
-    ) -> dict:
+    def health(self) -> dict:
         """Return the overall health of Webster."""
-
         return {
             "initialized": self._initialized,
             "running": self._running,
@@ -423,106 +265,58 @@ class Launcher:
             "conversation": self.conversation_manager.health(),
             "services": self.service_registry.health(),
             "plugins": self.plugin_manager.health(),
+            "voice": self.voice_manager.health(),
         }
 
-    # =====================================================
-    # Statistics
-    # =====================================================
-
     @property
-    def service_count(
-        self,
-    ) -> int:
-
+    def service_count(self) -> int:
         return self.service_registry.service_count
 
     @property
-    def provider_count(
-        self,
-    ) -> int:
-
+    def provider_count(self) -> int:
         return self.provider_manager.provider_count
 
     @property
-    def capability_count(
-        self,
-    ) -> int:
-
+    def capability_count(self) -> int:
         return self.capability_engine.capability_count()
 
     @property
-    def workflow_count(
-        self,
-    ) -> int:
-
+    def workflow_count(self) -> int:
         return self.planning_engine.workflow_count
 
     @property
-    def component_count(
-        self,
-    ) -> int:
-
-        return (
-            self.service_count
-            + self.provider_count
-            + self.capability_count
-            + self.workflow_count
-        )
-
-    # =====================================================
-    # Runtime Access
-    # =====================================================
+    def component_count(self) -> int:
+        return self.service_count + self.provider_count + self.capability_count + self.workflow_count
 
     @property
-    def ai(
-        self,
-    ):
-
+    def ai(self):
         return self.ai_engine
 
     @property
-    def planner(
-        self,
-    ):
-
+    def planner(self):
         return self.planning_engine
 
     @property
-    def capabilities(
-        self,
-    ):
-
+    def capabilities(self):
         return self.capability_engine
 
     @property
-    def providers(
-        self,
-    ):
-
+    def providers(self):
         return self.provider_manager
 
     @property
-    def services(
-        self,
-    ):
-
+    def services(self):
         return self.service_registry
 
     @property
-    def application(
-        self,
-    ):
+    def voice(self):
+        return self.voice_manager
 
+    @property
+    def application(self):
         return self._runtime.application
 
-    # =====================================================
-    # Representation
-    # =====================================================
-
-    def __repr__(
-        self,
-    ) -> str:
-
+    def __repr__(self) -> str:
         return (
             "Launcher("
             f"running={self._running}, "
