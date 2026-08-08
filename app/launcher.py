@@ -1,8 +1,4 @@
-"""
-WEBSTER ALPHA
-
-Application Launcher
-"""
+"""WEBSTER ALPHA - Application Launcher"""
 
 from __future__ import annotations
 
@@ -37,10 +33,11 @@ from core.messaging.manager import MessagingManager
 from core.provider.ollama import OllamaProvider
 from core.provider.manager import ProviderManager
 from core.voice.manager import VoiceManager
+from core.file.manager import FileManager
 
 
 class Launcher:
-    """Responsible for constructing and bootstrapping Webster."""
+    """Construct, wire, initialize, and run every Webster subsystem."""
 
     def __init__(self) -> None:
         self._initialized = False
@@ -60,8 +57,8 @@ class Launcher:
         self.capability_registry = CapabilityRegistry()
         self.capability_manager = CapabilityManager(registry=self.capability_registry)
         self.capability_engine = CapabilityEngine(
-            registry=self.capability_registry,
             manager=self.capability_manager,
+            registry=self.capability_registry,
             event_bus=self.event_bus,
         )
 
@@ -103,7 +100,9 @@ class Launcher:
         )
 
         self.voice_manager = VoiceManager()
+        self.file_manager = FileManager()
 
+        # Runtime is the central dependency graph.
         self._runtime.ai = self.ai_engine
         self._runtime.memory = self.memory_manager
         self._runtime.conversation = self.conversation_manager
@@ -129,6 +128,7 @@ class Launcher:
         self.messaging_manager.initialize()
         self.event_bus.initialize()
         self.voice_manager.initialize()
+        self.file_manager.initialize()
 
         self._register_services()
         self._register_providers()
@@ -138,6 +138,8 @@ class Launcher:
         self.capability_engine.initialize()
         self.planning_engine.initialize()
         self.ai_engine.initialize()
+
+        # Voice uses the exact same AI conversation pipeline as text chat.
         self.voice_manager.set_processor(self.ai_engine.chat)
 
         self._runtime.services = self.service_registry
@@ -169,6 +171,7 @@ class Launcher:
         self.service_registry.register("event_bus", self.event_bus)
         self.service_registry.register("messaging_manager", self.messaging_manager)
         self.service_registry.register("voice_manager", self.voice_manager)
+        self.service_registry.register("file_manager", self.file_manager)
 
     def _register_providers(self) -> None:
         if not self.provider_manager.has(self.provider.name):
@@ -191,25 +194,44 @@ class Launcher:
             return
         if not self._initialized:
             self.initialize()
+
         self._runtime.start()
         self.voice_manager.start()
+
         application = self._runtime.application
         if application is not None and not application.running:
             application.start()
+
         self._running = True
+
+        # Hands-free mode is part of the running application. It waits for
+        # speech and remains idle while there is no utterance.
+        if self.voice_manager.config.enabled and self.voice_manager.config.listen_enabled:
+            self.voice_manager.start_voice_loop()
 
     def voice_chat_once(self) -> str | None:
         if not self._running:
             self.start()
         return self.voice_manager.converse_once()
 
+    def start_voice(self) -> bool:
+        if not self._running:
+            self.start()
+        return self.voice_manager.start_voice_loop()
+
+    def stop_voice(self) -> None:
+        self.voice_manager.stop_voice_loop()
+
     def shutdown(self) -> None:
         if not self._running:
             return
+
         application = self._runtime.application
         if application is not None and application.running:
             application.shutdown()
+
         self.voice_manager.shutdown()
+        self.file_manager.shutdown()
         self.ai_engine.shutdown()
         self.planning_engine.shutdown()
         self.capability_engine.shutdown()
@@ -218,8 +240,10 @@ class Launcher:
         self.messaging_manager.shutdown()
         self.conversation_manager.shutdown()
         self.memory_manager.shutdown()
+        self.service_registry.shutdown()
         self._runtime.shutdown()
         self._running = False
+        self._initialized = False
 
     def restart(self) -> None:
         self.shutdown()
@@ -246,6 +270,7 @@ class Launcher:
             "services": self.service_registry.health(),
             "plugins": self.plugin_manager.health(),
             "voice": self.voice_manager.health(),
+            "files": self.file_manager.health(),
         }
 
     @property
@@ -291,6 +316,10 @@ class Launcher:
     @property
     def voice(self):
         return self.voice_manager
+
+    @property
+    def files(self):
+        return self.file_manager
 
     @property
     def application(self):
