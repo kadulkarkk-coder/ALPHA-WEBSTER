@@ -7,10 +7,9 @@ Conversation Manager
 from __future__ import annotations
 
 from core.conversation.context import ConversationContext
-from core.conversation.history import ConversationHistory
 from core.conversation.session import ConversationSession
-from core.events.event_bus import EventBus
 from core.events.event import Event
+from core.events.event_bus import EventBus
 from core.events.event_types import EventType
 from core.memory.manager import MemoryManager
 from core.messaging.message import Message
@@ -18,7 +17,7 @@ from core.messaging.message import Message
 
 class ConversationManager:
     """
-    Coordinates conversation sessions.
+    Coordinates Webster conversation sessions.
     """
 
     def __init__(
@@ -27,12 +26,15 @@ class ConversationManager:
         event_bus: EventBus | None = None,
     ) -> None:
 
+        if memory is None:
+
+            raise ValueError(
+                "ConversationManager requires a MemoryManager."
+            )
+
         self._memory = memory
-
         self._event_bus = event_bus
-
         self._session: ConversationSession | None = None
-
         self._initialized = False
 
     # =====================================================
@@ -42,47 +44,23 @@ class ConversationManager:
     def initialize(
         self,
     ) -> None:
-        """
-        Initialize the conversation subsystem.
+        """Initialize the conversation subsystem."""
 
-        The conversation manager depends on the memory
-        manager being available before it becomes ready.
-        """
-
-        if self._initialized is False:
+        if self._initialized:
 
             return
 
         if self._memory is None:
 
             raise RuntimeError(
-
-                "ConversationManager requires "
-                "a MemoryManager."
-
+                "ConversationManager requires a MemoryManager."
             )
 
-        #
-        # Initialize the dependency if necessary.
-        #
-
-        if hasattr(
-            self._memory,
-            "initialized",
-        ):
+        if hasattr(self._memory, "initialized"):
 
             if not self._memory.initialized:
 
                 self._memory.initialize()
-
-        #
-        # Conversation state is already stored in memory.
-        # No external resource needs to be opened here.
-        #
-
-        if self._messages is None:
-
-            self._messages = []
 
         self._initialized = True
 
@@ -91,17 +69,35 @@ class ConversationManager:
     def shutdown(
         self,
     ) -> None:
-        """
-        Shutdown the conversation subsystem.
-
-        Conversation history is deliberately preserved.
-        """
+        """Stop the conversation subsystem without deleting history."""
 
         if not self._initialized:
 
             return
 
         self._initialized = False
+
+    # -----------------------------------------------------
+
+    def start(
+        self,
+    ) -> ConversationSession:
+        """Start or return the active conversation session."""
+
+        if not self._initialized:
+
+            self.initialize()
+
+        if self._session is None:
+
+            self._session = ConversationSession()
+            self._session.activate()
+
+        elif not self._session.active:
+
+            self._session.activate()
+
+        return self._session
 
     # =====================================================
     # State
@@ -114,70 +110,54 @@ class ConversationManager:
 
         return self._initialized
 
-    # -----------------------------------------------------
-
     @property
     def ready(
         self,
     ) -> bool:
 
         return (
-
             self._initialized
-
             and self._memory is not None
-
         )
 
-    # =====================================================
-    # Health
-    # =====================================================
-
-    def health(
+    @property
+    def session(
         self,
-    ) -> dict:
-        """
-        Return conversation subsystem health.
-        """
+    ) -> ConversationSession | None:
 
-        return {
+        return self._session
 
-            "initialized": self._initialized,
+    @property
+    def context(
+        self,
+    ) -> ConversationContext:
 
-            "healthy": self.ready,
+        return self.build_context()
 
-            "ready": self.ready,
-
-            "messages": len(
-                self._messages
-            ),
-
-            "memory_available": (
-                self._memory is not None
-            ),
-
-        }
-
-    #
-    # ---------------------------------------------------------
+    # =====================================================
     # Messages
-    # ---------------------------------------------------------
-    #
+    # =====================================================
 
     def receive(
         self,
-        message: Message
+        message: Message,
     ) -> None:
+        """Receive and store an internal Webster message."""
 
-        if self._session is None:
+        if not isinstance(message, Message):
 
-            self.start()
+            raise TypeError(
+                "ConversationManager.receive expects a Message."
+            )
 
-        self._session.history.append(
+        session = self.start()
+
+        session.add_message(
             message
         )
 
         if self._event_bus is not None:
+
             self._event_bus.publish(
                 Event(
                     name=EventType.CONVERSATION_UPDATED.name,
@@ -190,20 +170,15 @@ class ConversationManager:
                 )
             )
 
-    # =====================================================
-    # Application Message API
-    # =====================================================
+    # -----------------------------------------------------
 
     def add_user_message(
         self,
         content: str,
     ) -> None:
-        """
-        Add a message originating from the user.
+        """Add a message originating from the user."""
 
-        This is the application-facing wrapper around
-        the internal receive(Message) API.
-        """
+        content = str(content).strip()
 
         if not content:
 
@@ -211,20 +186,13 @@ class ConversationManager:
                 "User message cannot be empty."
             )
 
-        message = Message(
-
-            sender="user",
-
-            receiver="webster",
-
-            payload=content,
-
-            message_type="user",
-
-        )
-
         self.receive(
-            message
+            Message(
+                sender="user",
+                receiver="webster",
+                payload=content,
+                message_type="user",
+            )
         )
 
     # -----------------------------------------------------
@@ -233,9 +201,9 @@ class ConversationManager:
         self,
         content: str,
     ) -> None:
-        """
-        Add a message generated by Webster.
-        """
+        """Add a message generated by Webster."""
+
+        content = str(content).strip()
 
         if not content:
 
@@ -243,31 +211,23 @@ class ConversationManager:
                 "Assistant message cannot be empty."
             )
 
-        message = Message(
-
-            sender="webster",
-
-            receiver="user",
-
-            payload=content,
-
-            message_type="assistant",
-
-        )
-
         self.receive(
-            message
+            Message(
+                sender="webster",
+                receiver="user",
+                payload=content,
+                message_type="assistant",
+            )
         )
 
-    #
-    # ---------------------------------------------------------
+    # =====================================================
     # Context
-    # ---------------------------------------------------------
-    #
+    # =====================================================
 
     def build_context(
-        self
+        self,
     ) -> ConversationContext:
+        """Build context from the recent active conversation."""
 
         context = ConversationContext()
 
@@ -275,72 +235,86 @@ class ConversationManager:
 
             return context
 
-        #
-        # Recent messages
-        #
-
-        for message in self._session.history.last(10):
+        for message in self._session.messages[-10:]:
 
             context.add_message(
                 message
             )
 
         if self._event_bus is not None:
+
             self._event_bus.publish(
                 Event(
                     name=EventType.CONVERSATION_UPDATED.name,
                     source="conversation_manager",
                     data={
-                        "message_count": self._session.history.count,
+                        "message_count": self._session.message_count,
                     },
                 )
             )
 
-        #
-        # Memory retrieval
-        # (implemented later)
-        #
-
         return context
 
-    #
-    # ---------------------------------------------------------
-    # Lifecycle
-    # ---------------------------------------------------------
-    #
+    # =====================================================
+    # Session Control
+    # =====================================================
 
     def finish(
-        self
+        self,
     ) -> None:
 
-        if self._session:
+        if self._session is not None:
 
             self._session.finish()
 
     def clear(
-        self
+        self,
     ) -> None:
 
         self._session = None
 
-    #
-    # ---------------------------------------------------------
+    # =====================================================
+    # Health
+    # =====================================================
+
+    def health(
+        self,
+    ) -> dict:
+
+        message_count = 0
+
+        if self._session is not None:
+
+            message_count = self._session.message_count
+
+        return {
+            "initialized": self._initialized,
+            "healthy": self.ready,
+            "ready": self.ready,
+            "messages": message_count,
+            "memory_available": self._memory is not None,
+            "session_active": (
+                self._session.active
+                if self._session is not None
+                else False
+            ),
+        }
+
+    # =====================================================
     # Representation
-    # ---------------------------------------------------------
-    #
+    # =====================================================
 
     def __repr__(
-        self
+        self,
     ) -> str:
 
-        state = "active" if self._session else "idle"
+        state = "active" if (
+            self._session is not None
+            and self._session.active
+        ) else "idle"
 
         return (
-
             "ConversationManager("
-
             f"{state}"
-
             ")"
-
         )
