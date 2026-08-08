@@ -41,19 +41,13 @@ class OllamaProvider(Provider):
     def initialize(
         self,
     ) -> None:
-        """Verify Ollama availability."""
-
-        if not self.available():
-
-            raise RuntimeError(
-                "Ollama server is not running."
-            )
+        """Initialize without making Ollama availability fatal to startup."""
+        return
 
     def generate(
         self,
         request: AIRequest,
     ) -> AIResponse:
-        """Generate a complete response."""
 
         payload = {
             "model": self._model,
@@ -106,7 +100,6 @@ class OllamaProvider(Provider):
         for line in response.iter_lines():
 
             if not line:
-
                 continue
 
             chunk = json.loads(
@@ -114,7 +107,6 @@ class OllamaProvider(Provider):
             )
 
             if "response" in chunk:
-
                 yield chunk["response"]
 
     def available(
@@ -138,22 +130,23 @@ class OllamaProvider(Provider):
     def model(
         self,
     ) -> str:
-
         return self._model
 
     def set_model(
         self,
         model: str,
     ) -> None:
-
         self._model = model
 
     def health(
         self,
     ) -> dict:
 
+        available = self.available()
+
         return {
-            "healthy": self.available(),
+            "healthy": available,
+            "ready": available,
             "provider": self.name,
             "model": self._model,
             "host": self._host,
@@ -162,8 +155,7 @@ class OllamaProvider(Provider):
     def shutdown(
         self,
     ) -> None:
-
-        pass
+        return
 
     def __repr__(
         self,
