@@ -10,13 +10,9 @@ from core.voice.engine import VoiceEngine
 
 
 class VoiceManager:
-    """Public lifecycle and voice-conversation API for Webster."""
+    """Public lifecycle and hands-free voice conversation API."""
 
-    def __init__(
-        self,
-        engine: VoiceEngine | None = None,
-        config: VoiceConfig | None = None,
-    ) -> None:
+    def __init__(self, engine: VoiceEngine | None = None, config: VoiceConfig | None = None) -> None:
         self.config = config or VoiceConfig()
         self.engine = engine or VoiceEngine(config=self.config)
         self._initialized = False
@@ -44,8 +40,6 @@ class VoiceManager:
 
     def stop(self) -> None:
         self._stop_event.set()
-        if not self._running:
-            return
         self.engine.stop()
         self._running = False
 
@@ -74,7 +68,6 @@ class VoiceManager:
     def converse_once(self) -> str | None:
         if not self._initialized:
             self.initialize()
-
         if self._processor is None:
             self._last_error = "No voice conversation processor is configured."
             return None
@@ -88,50 +81,43 @@ class VoiceManager:
             if not response:
                 self._last_error = "AI returned an empty response."
                 return None
-
             self._last_response = response
-            self.speak(response)
-            self._last_error = None
+            if not self.speak(response):
+                self._last_error = self.engine.speaker.error or "Voice output failed."
+            else:
+                self._last_error = None
             return response
         except Exception as error:
             self._last_error = str(error)
             return None
 
     def start_voice_loop(self) -> bool:
-        """Start continuous listen -> think -> speak mode in a worker thread."""
+        """Start hands-free mode: wait for speech, answer, then listen again."""
         if self._processor is None:
             self._last_error = "No voice conversation processor is configured."
             return False
-
         if self._loop_thread is not None and self._loop_thread.is_alive():
             return False
-
         if not self._initialized:
             self.initialize()
-
         self._stop_event.clear()
         self.start()
-        self._loop_thread = Thread(
-            target=self._voice_loop,
-            name="WebsterVoiceLoop",
-            daemon=True,
-        )
+        self._loop_thread = Thread(target=self._voice_loop, name="WebsterVoiceLoop", daemon=True)
         self._loop_thread.start()
         return True
 
     def stop_voice_loop(self) -> None:
-        """Request the continuous voice loop to stop and release audio."""
+        """Stop hands-free mode and release active voice resources."""
         self._stop_event.set()
         self.engine.stop()
         self._running = False
-
         thread = self._loop_thread
         if thread is not None and thread.is_alive() and thread is not current_thread():
             thread.join(timeout=1.0)
         self._loop_thread = None
 
     def _voice_loop(self) -> None:
-        """Worker loop; contain failures so one utterance cannot kill Webster."""
+        """Wait for speech, process it, speak the answer, then wait again."""
         while not self._stop_event.is_set():
             try:
                 self.converse_once()
