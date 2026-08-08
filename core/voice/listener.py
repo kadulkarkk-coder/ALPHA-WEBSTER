@@ -26,10 +26,7 @@ class VoiceListener:
         try:
             self._backend.initialize()
             if hasattr(self._backend, "configure_vad") and self.config.vad_enabled:
-                self._backend.configure_vad(
-                    self.config.vad_energy_threshold,
-                    self.config.vad_pause_threshold,
-                )
+                self._backend.configure_vad(self.config.vad_energy_threshold, self.config.vad_pause_threshold)
         except Exception as error:
             self._error = str(error)
         self._initialized = True
@@ -48,31 +45,27 @@ class VoiceListener:
         finally:
             self._listening = False
 
-    def listen(self) -> str | None:
-        """Wait for speech and return a command, optionally requiring the wake word."""
+    def listen(self, ignore_wake_word: bool = False) -> str | None:
+        """Wait for speech; normal mode optionally requires the configured wake word."""
         if not self._initialized:
             self.initialize()
         if not self.config.enabled or not self.config.listen_enabled or not self._backend.available:
             return None
-
         try:
             self._listening = True
             text = self._backend.listen(
-                timeout=self.config.wake_word_timeout if self.config.wake_word_enabled else self.config.input_timeout,
+                timeout=self.config.wake_word_timeout if self.config.wake_word_enabled and not ignore_wake_word else self.config.input_timeout,
                 phrase_timeout=self.config.phrase_timeout,
             )
             if not text:
                 return None
             text = text.strip()
-            if self.config.wake_word_enabled:
-                command = self._extract_wake_command(text)
-                if command is None:
-                    self._wake_word_detected = False
-                    return None
+            if ignore_wake_word or not self.config.wake_word_enabled:
                 self._wake_word_detected = True
-                return command or None
-            self._wake_word_detected = True
-            return text
+                return text
+            command = self._extract_wake_command(text)
+            self._wake_word_detected = command is not None
+            return command or None if command is not None else None
         except Exception as error:
             self._error = str(error)
             return None
