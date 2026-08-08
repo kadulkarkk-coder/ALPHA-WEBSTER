@@ -16,6 +16,7 @@ from core.plugins.manager import PluginManager
 from core.events.event_bus import EventBus
 from core.messaging.manager import MessagingManager
 from core.provider.manager import ProviderManager
+from core.voice.manager import VoiceManager
 
 
 class Runtime:
@@ -32,6 +33,7 @@ class Runtime:
         self._plugins: PluginManager | None = None
         self._events: EventBus | None = None
         self._messaging: MessagingManager | None = None
+        self._voice: VoiceManager | None = None
         self._application = None
         self._initialized = False
         self._running = False
@@ -137,6 +139,14 @@ class Runtime:
         self._messaging = value
 
     @property
+    def voice(self):
+        return self._voice
+
+    @voice.setter
+    def voice(self, value):
+        self._voice = value
+
+    @property
     def application(self):
         return self._application
 
@@ -187,6 +197,7 @@ class Runtime:
         self._events = None
         self._messaging = None
         self._provider = None
+        self._voice = None
 
         if self._services is not None:
             self._services.clear()
@@ -229,6 +240,7 @@ class Runtime:
                 self._plugins,
                 self._events,
                 self._messaging,
+                self._voice,
             )
         )
 
@@ -245,6 +257,7 @@ class Runtime:
                 "plugins": self.plugins is not None,
                 "events": self.events is not None,
                 "messaging": self.messaging is not None,
+                "voice": self.voice is not None,
                 "capabilities": self.capability_engine is not None,
                 "planning": self.planning_engine is not None,
                 "ai": self.ai is not None,
