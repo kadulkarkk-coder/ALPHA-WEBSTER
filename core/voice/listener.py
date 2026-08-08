@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from core.voice.config import VoiceConfig
-from core.voice.stt import NullSpeechBackend, SpeechToTextBackend
+from core.voice.stt import MicrophoneSpeechBackend, NullSpeechBackend, SpeechToTextBackend
 
 
 class VoiceListener:
@@ -15,7 +15,7 @@ class VoiceListener:
         backend: SpeechToTextBackend | None = None,
     ) -> None:
         self.config = config or VoiceConfig()
-        self._backend = backend or NullSpeechBackend()
+        self._backend = backend or MicrophoneSpeechBackend()
         self._initialized = False
         self._listening = False
         self._error: str | None = None
@@ -25,6 +25,9 @@ class VoiceListener:
             return
 
         self._error = None
+        if not self.config.enabled or not self.config.listen_enabled:
+            self._backend = NullSpeechBackend()
+
         try:
             self._backend.initialize()
         except Exception as error:
@@ -53,7 +56,6 @@ class VoiceListener:
 
         if not self.config.enabled or not self.config.listen_enabled:
             return None
-
         if not self._backend.available:
             return None
 
@@ -97,4 +99,4 @@ class VoiceListener:
 
     @property
     def error(self) -> str | None:
-        return self._error
+        return self._error or getattr(self._backend, "error", None)
