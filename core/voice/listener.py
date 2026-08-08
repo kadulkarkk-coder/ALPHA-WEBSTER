@@ -7,40 +7,38 @@ from core.voice.stt import MicrophoneSpeechBackend, NullSpeechBackend, SpeechToT
 
 
 class VoiceListener:
-    """Coordinates microphone/STT backends without coupling Webster to one."""
+    """Coordinates microphone/STT backends and wake-word filtering."""
 
-    def __init__(
-        self,
-        config: VoiceConfig | None = None,
-        backend: SpeechToTextBackend | None = None,
-    ) -> None:
+    def __init__(self, config: VoiceConfig | None = None, backend: SpeechToTextBackend | None = None) -> None:
         self.config = config or VoiceConfig()
         self._backend = backend or MicrophoneSpeechBackend()
         self._initialized = False
         self._listening = False
         self._error: str | None = None
+        self._wake_word_detected = False
 
     def initialize(self) -> None:
         if self._initialized:
             return
-
         self._error = None
         if not self.config.enabled or not self.config.listen_enabled:
             self._backend = NullSpeechBackend()
-
         try:
             self._backend.initialize()
+            if hasattr(self._backend, "configure_vad") and self.config.vad_enabled:
+                self._backend.configure_vad(
+                    self.config.vad_energy_threshold,
+                    self.config.vad_pause_threshold,
+                )
         except Exception as error:
             self._error = str(error)
-
         self._initialized = True
 
     def start(self) -> None:
         if not self._initialized:
             self.initialize()
-        if not self.config.enabled or not self.config.listen_enabled:
-            return
-        self._listening = True
+        if self.config.enabled and self.config.listen_enabled:
+            self._listening = True
 
     def stop(self) -> None:
         try:
@@ -51,26 +49,50 @@ class VoiceListener:
             self._listening = False
 
     def listen(self) -> str | None:
+        """Wait for speech and return a command, optionally requiring the wake word."""
         if not self._initialized:
             self.initialize()
-
-        if not self.config.enabled or not self.config.listen_enabled:
-            return None
-        if not self._backend.available:
+        if not self.config.enabled or not self.config.listen_enabled or not self._backend.available:
             return None
 
         try:
             self._listening = True
-            result = self._backend.listen(
-                timeout=self.config.input_timeout,
+            text = self._backend.listen(
+                timeout=self.config.wake_word_timeout if self.config.wake_word_enabled else self.config.input_timeout,
                 phrase_timeout=self.config.phrase_timeout,
             )
-            return result.strip() if result else None
+            if not text:
+                return None
+            text = text.strip()
+            if self.config.wake_word_enabled:
+                command = self._extract_wake_command(text)
+                if command is None:
+                    self._wake_word_detected = False
+                    return None
+                self._wake_word_detected = True
+                return command or None
+            self._wake_word_detected = True
+            return text
         except Exception as error:
             self._error = str(error)
             return None
         finally:
             self._listening = False
+
+    def _extract_wake_command(self, text: str) -> str | None:
+        normalized = " ".join(text.lower().split())
+        wake = self.config.wake_word
+        if normalized == wake:
+            return ""
+        prefix = wake + " "
+        if normalized.startswith(prefix):
+            return text[len(wake):].strip()
+        return None
+
+    def set_speaker_active(self, active: bool, allow_barge_in: bool = False) -> None:
+        setter = getattr(self._backend, "set_speaking", None)
+        if callable(setter):
+            setter(active, allow_barge_in)
 
     def shutdown(self) -> None:
         self.stop()
@@ -96,6 +118,10 @@ class VoiceListener:
     @property
     def backend_name(self) -> str:
         return self._backend.name
+
+    @property
+    def wake_word_detected(self) -> bool:
+        return self._wake_word_detected
 
     @property
     def error(self) -> str | None:
