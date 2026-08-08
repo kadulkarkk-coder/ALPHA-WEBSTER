@@ -1,4 +1,4 @@
-"""Speech-to-text backends for Webster Alpha."""
+"""Speech-to-text and voice-activity backends for Webster Alpha."""
 
 from __future__ import annotations
 
@@ -12,33 +12,28 @@ class SpeechToTextBackend(ABC):
 
     @abstractmethod
     def initialize(self) -> None:
-        """Initialize the backend."""
         raise NotImplementedError
 
     @abstractmethod
     def listen(self, timeout: float, phrase_timeout: float) -> str | None:
-        """Capture and recognize one utterance."""
         raise NotImplementedError
 
     @abstractmethod
     def stop(self) -> None:
-        """Stop active recognition."""
         raise NotImplementedError
 
     @abstractmethod
     def shutdown(self) -> None:
-        """Release backend resources."""
         raise NotImplementedError
 
     @property
     @abstractmethod
     def available(self) -> bool:
-        """Whether this backend is ready to recognize speech."""
         raise NotImplementedError
 
 
 class NullSpeechBackend(SpeechToTextBackend):
-    """Safe fallback used when no real STT backend is available."""
+    """Safe fallback when no microphone STT backend is installed."""
 
     name = "none"
 
@@ -60,11 +55,7 @@ class NullSpeechBackend(SpeechToTextBackend):
 
 
 class MicrophoneSpeechBackend(SpeechToTextBackend):
-    """Optional microphone backend using SpeechRecognition.
-
-    The dependency is imported lazily so the voice subsystem remains
-    optional and Webster can start without microphone support.
-    """
+    """SpeechRecognition backend with microphone voice-activity detection."""
 
     name = "speech_recognition"
 
@@ -73,6 +64,7 @@ class MicrophoneSpeechBackend(SpeechToTextBackend):
         self._microphone = None
         self._available = False
         self._listening = False
+        self._speaking = False
         self._error: str | None = None
 
     def initialize(self) -> None:
@@ -93,19 +85,21 @@ class MicrophoneSpeechBackend(SpeechToTextBackend):
             self._error = str(error)
 
     def listen(self, timeout: float, phrase_timeout: float) -> str | None:
+        """Wait for voice activity, capture the utterance, then stop at silence."""
         if not self._available:
             self.initialize()
 
-        if self._recognizer is None or self._microphone is None:
+        if self._recognizer is None or self._microphone is None or self._speaking:
             return None
 
         try:
             with self._microphone as source:
-                self._recognizer.adjust_for_ambient_noise(
-                    source,
-                    duration=0.5,
-                )
                 self._listening = True
+
+                # Calibrate only once per microphone session when possible.
+                self._recognizer.adjust_for_ambient_noise(source, duration=0.25)
+
+                # listen() waits for speech energy and ends when speech stops.
                 audio = self._recognizer.listen(
                     source,
                     timeout=timeout,
@@ -115,9 +109,18 @@ class MicrophoneSpeechBackend(SpeechToTextBackend):
             text = self._recognizer.recognize_google(audio)
             return text.strip() or None
         except Exception as error:
+            # Timeout/no speech is normal in hands-free mode, not a fatal error.
+            if error.__class__.__name__ == "WaitTimeoutError":
+                return None
             self._error = str(error)
             return None
         finally:
+            self._listening = False
+
+    def set_speaking(self, speaking: bool) -> None:
+        """Temporarily disable microphone capture while Webster speaks."""
+        self._speaking = speaking
+        if speaking:
             self._listening = False
 
     def stop(self) -> None:
@@ -131,11 +134,15 @@ class MicrophoneSpeechBackend(SpeechToTextBackend):
 
     @property
     def available(self) -> bool:
-        return self._available
+        return self._available and not self._speaking
 
     @property
     def listening(self) -> bool:
         return self._listening
+
+    @property
+    def speaking(self) -> bool:
+        return self._speaking
 
     @property
     def error(self) -> str | None:
