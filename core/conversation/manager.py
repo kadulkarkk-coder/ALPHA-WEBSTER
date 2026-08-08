@@ -160,7 +160,7 @@ class ConversationManager:
 
             self._event_bus.publish(
                 Event(
-                    name=EventType.CONVERSATION_UPDATED.name,
+                    name=EventType.USER_MESSAGE.name,
                     source="conversation_manager",
                     data={
                         "sender": message.sender,
@@ -245,7 +245,7 @@ class ConversationManager:
 
             self._event_bus.publish(
                 Event(
-                    name=EventType.CONVERSATION_UPDATED.name,
+                    name=EventType.USER_MESSAGE.name,
                     source="conversation_manager",
                     data={
                         "message_count": self._session.message_count,

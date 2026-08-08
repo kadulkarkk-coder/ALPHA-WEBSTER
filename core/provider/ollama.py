@@ -24,7 +24,7 @@ class OllamaProvider(Provider):
 
     def __init__(
         self,
-        model: str = "qwen3:latest",
+        model: str = "qwen2.5:3b",
         host: str = DEFAULT_HOST,
         timeout: float = 120.0,
     ) -> None:
