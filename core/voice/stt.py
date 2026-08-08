@@ -1,4 +1,4 @@
-"""Speech-to-text backend abstraction for Webster Alpha."""
+"""Speech-to-text backends for Webster Alpha."""
 
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ class SpeechToTextBackend(ABC):
 
 
 class NullSpeechBackend(SpeechToTextBackend):
-    """Safe fallback used until a real STT backend is installed."""
+    """Safe fallback used when no real STT backend is available."""
 
     name = "none"
 
@@ -57,3 +57,86 @@ class NullSpeechBackend(SpeechToTextBackend):
     @property
     def available(self) -> bool:
         return False
+
+
+class MicrophoneSpeechBackend(SpeechToTextBackend):
+    """Optional microphone backend using SpeechRecognition.
+
+    The dependency is imported lazily so the voice subsystem remains
+    optional and Webster can start without microphone support.
+    """
+
+    name = "speech_recognition"
+
+    def __init__(self) -> None:
+        self._recognizer = None
+        self._microphone = None
+        self._available = False
+        self._listening = False
+        self._error: str | None = None
+
+    def initialize(self) -> None:
+        if self._available:
+            return
+
+        try:
+            import speech_recognition as sr
+
+            self._recognizer = sr.Recognizer()
+            self._microphone = sr.Microphone()
+            self._available = True
+            self._error = None
+        except Exception as error:
+            self._recognizer = None
+            self._microphone = None
+            self._available = False
+            self._error = str(error)
+
+    def listen(self, timeout: float, phrase_timeout: float) -> str | None:
+        if not self._available:
+            self.initialize()
+
+        if self._recognizer is None or self._microphone is None:
+            return None
+
+        try:
+            with self._microphone as source:
+                self._recognizer.adjust_for_ambient_noise(
+                    source,
+                    duration=0.5,
+                )
+                self._listening = True
+                audio = self._recognizer.listen(
+                    source,
+                    timeout=timeout,
+                    phrase_time_limit=phrase_timeout,
+                )
+
+            text = self._recognizer.recognize_google(audio)
+            return text.strip() or None
+        except Exception as error:
+            self._error = str(error)
+            return None
+        finally:
+            self._listening = False
+
+    def stop(self) -> None:
+        self._listening = False
+
+    def shutdown(self) -> None:
+        self.stop()
+        self._recognizer = None
+        self._microphone = None
+        self._available = False
+
+    @property
+    def available(self) -> bool:
+        return self._available
+
+    @property
+    def listening(self) -> bool:
+        return self._listening
+
+    @property
+    def error(self) -> str | None:
+        return self._error
