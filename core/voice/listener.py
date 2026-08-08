@@ -1,25 +1,35 @@
-"""Voice input abstraction for Webster."""
+"""Speech input coordinator for Webster Alpha."""
 
 from __future__ import annotations
 
 from core.voice.config import VoiceConfig
+from core.voice.stt import NullSpeechBackend, SpeechToTextBackend
 
 
 class VoiceListener:
-    """Backend-neutral speech input interface.
+    """Coordinates microphone/STT backends without coupling Webster to one."""
 
-    Sprint 36.1 intentionally does not require a microphone or STT package.
-    Concrete speech-recognition backends can be attached later.
-    """
-
-    def __init__(self, config: VoiceConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: VoiceConfig | None = None,
+        backend: SpeechToTextBackend | None = None,
+    ) -> None:
         self.config = config or VoiceConfig()
+        self._backend = backend or NullSpeechBackend()
         self._initialized = False
         self._listening = False
+        self._error: str | None = None
 
     def initialize(self) -> None:
         if self._initialized:
             return
+
+        self._error = None
+        try:
+            self._backend.initialize()
+        except Exception as error:
+            self._error = str(error)
+
         self._initialized = True
 
     def start(self) -> None:
@@ -30,21 +40,44 @@ class VoiceListener:
         self._listening = True
 
     def stop(self) -> None:
-        self._listening = False
+        try:
+            self._backend.stop()
+        except Exception as error:
+            self._error = str(error)
+        finally:
+            self._listening = False
 
     def listen(self) -> str | None:
-        """Return recognized text when a backend is installed.
-
-        The base implementation deliberately returns ``None`` rather than
-        pretending that speech was recognized.
-        """
         if not self._initialized:
             self.initialize()
-        return None
+
+        if not self.config.enabled or not self.config.listen_enabled:
+            return None
+
+        if not self._backend.available:
+            return None
+
+        try:
+            self._listening = True
+            result = self._backend.listen(
+                timeout=self.config.input_timeout,
+                phrase_timeout=self.config.phrase_timeout,
+            )
+            return result.strip() if result else None
+        except Exception as error:
+            self._error = str(error)
+            return None
+        finally:
+            self._listening = False
 
     def shutdown(self) -> None:
         self.stop()
-        self._initialized = False
+        try:
+            self._backend.shutdown()
+        except Exception as error:
+            self._error = str(error)
+        finally:
+            self._initialized = False
 
     @property
     def initialized(self) -> bool:
@@ -53,3 +86,15 @@ class VoiceListener:
     @property
     def listening(self) -> bool:
         return self._listening
+
+    @property
+    def available(self) -> bool:
+        return self._backend.available
+
+    @property
+    def backend_name(self) -> str:
+        return self._backend.name
+
+    @property
+    def error(self) -> str | None:
+        return self._error
