@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from threading import Event, Thread
+from threading import Event, Thread, current_thread
 
 from core.voice.config import VoiceConfig
 from core.voice.engine import VoiceEngine
@@ -98,7 +98,7 @@ class VoiceManager:
             return None
 
     def start_voice_loop(self) -> bool:
-        """Start continuous listen → think → speak mode in a worker thread."""
+        """Start continuous listen -> think -> speak mode in a worker thread."""
         if self._processor is None:
             self._last_error = "No voice conversation processor is configured."
             return False
@@ -126,12 +126,12 @@ class VoiceManager:
         self._running = False
 
         thread = self._loop_thread
-        if thread is not None and thread.is_alive() and thread is not Thread.current_thread():
+        if thread is not None and thread.is_alive() and thread is not current_thread():
             thread.join(timeout=1.0)
         self._loop_thread = None
 
     def _voice_loop(self) -> None:
-        """Worker loop; all AI/TTS failures are contained in one iteration."""
+        """Worker loop; contain failures so one utterance cannot kill Webster."""
         while not self._stop_event.is_set():
             try:
                 self.converse_once()
