@@ -1,8 +1,4 @@
-"""
-WEBSTER ALPHA
-
-Application Runtime
-"""
+"""WEBSTER ALPHA - Application Runtime"""
 
 from __future__ import annotations
 
@@ -17,6 +13,7 @@ from core.events.event_bus import EventBus
 from core.messaging.manager import MessagingManager
 from core.provider.manager import ProviderManager
 from core.voice.manager import VoiceManager
+from core.file.manager import FileManager
 
 
 class Runtime:
@@ -34,6 +31,7 @@ class Runtime:
         self._events: EventBus | None = None
         self._messaging: MessagingManager | None = None
         self._voice: VoiceManager | None = None
+        self._file_manager: FileManager | None = None
         self._application = None
         self._initialized = False
         self._running = False
@@ -147,6 +145,14 @@ class Runtime:
         self._voice = value
 
     @property
+    def files(self):
+        return self._file_manager
+
+    @files.setter
+    def files(self, value):
+        self._file_manager = value
+
+    @property
     def application(self):
         return self._application
 
@@ -198,6 +204,7 @@ class Runtime:
         self._messaging = None
         self._provider = None
         self._voice = None
+        self._file_manager = None
 
         if self._services is not None:
             self._services.clear()
@@ -241,6 +248,7 @@ class Runtime:
                 self._events,
                 self._messaging,
                 self._voice,
+                self._file_manager,
             )
         )
 
@@ -258,6 +266,7 @@ class Runtime:
                 "events": self.events is not None,
                 "messaging": self.messaging is not None,
                 "voice": self.voice is not None,
+                "files": self.files is not None,
                 "capabilities": self.capability_engine is not None,
                 "planning": self.planning_engine is not None,
                 "ai": self.ai is not None,
@@ -265,7 +274,4 @@ class Runtime:
         }
 
     def __repr__(self) -> str:
-        return (
-            f"Runtime(initialized={self._initialized}, "
-            f"running={self._running})"
-        )
+        return f"Runtime(initialized={self._initialized}, running={self._running})"
