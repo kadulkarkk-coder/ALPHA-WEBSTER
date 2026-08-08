@@ -12,7 +12,7 @@ from core.capability.browser.back import BackCapability
 from core.capability.browser.open_url import OpenUrlCapability
 from core.capability.browser.refresh import RefreshCapability
 from core.capability.file.create_folder import CreateFolderCapability
-from core.capability.file.delete_file import DeleteFileCapability
+from core.capability.file.delete import DeleteFileCapability
 from core.capability.file.rename import RenameFileCapability
 from core.capability.registry import CapabilityRegistry
 from core.container.service_registry import ServiceRegistry
@@ -43,8 +43,6 @@ class Launcher:
     """Responsible for constructing and bootstrapping Webster."""
 
     def __init__(self) -> None:
-        """Construct every long-lived Webster object."""
-
         self._initialized = False
         self._running = False
         self._runtime = Runtime()
@@ -104,7 +102,6 @@ class Launcher:
             response_builder=self.response_builder,
         )
 
-        # Voice subsystem
         self.voice_manager = VoiceManager()
 
         self._runtime.ai = self.ai_engine
@@ -120,7 +117,6 @@ class Launcher:
         self._runtime.voice = self.voice_manager
 
     def initialize(self) -> None:
-        """Initialize Webster exactly once."""
         if self._initialized:
             return
 
@@ -142,8 +138,6 @@ class Launcher:
         self.capability_engine.initialize()
         self.planning_engine.initialize()
         self.ai_engine.initialize()
-
-        # 36.7: voice transcripts are processed by the same AI engine as text chat.
         self.voice_manager.set_processor(self.ai_engine.chat)
 
         self._runtime.services = self.service_registry
@@ -165,7 +159,6 @@ class Launcher:
         self._initialized = True
 
     def _register_services(self) -> None:
-        """Register all Webster services."""
         self.service_registry.register("provider_manager", self.provider_manager)
         self.service_registry.register("memory_manager", self.memory_manager)
         self.service_registry.register("conversation_manager", self.conversation_manager)
@@ -178,13 +171,11 @@ class Launcher:
         self.service_registry.register("voice_manager", self.voice_manager)
 
     def _register_providers(self) -> None:
-        """Register AI providers."""
         if not self.provider_manager.has(self.provider.name):
             self.provider_manager.register(self.provider)
         self.provider_manager.set_default(self.provider.name)
 
     def _register_capabilities(self) -> None:
-        """Register all currently implemented capabilities."""
         self.capability_engine.register(OpenUrlCapability())
         self.capability_engine.register(RefreshCapability())
         self.capability_engine.register(BackCapability())
@@ -193,40 +184,31 @@ class Launcher:
         self.capability_engine.register(RenameFileCapability())
 
     def _register_workflows(self) -> None:
-        """Register Webster workflows."""
         pass
 
     def start(self) -> None:
-        """Start Webster and its public Application."""
         if self._running:
             return
         if not self._initialized:
             self.initialize()
-
         self._runtime.start()
         self.voice_manager.start()
-
         application = self._runtime.application
         if application is not None and not application.running:
             application.start()
-
         self._running = True
 
     def voice_chat_once(self) -> str | None:
-        """Listen for one spoken request and answer it aloud."""
         if not self._running:
             self.start()
         return self.voice_manager.converse_once()
 
     def shutdown(self) -> None:
-        """Shutdown Webster cleanly."""
         if not self._running:
             return
-
         application = self._runtime.application
         if application is not None and application.running:
             application.shutdown()
-
         self.voice_manager.shutdown()
         self.ai_engine.shutdown()
         self.planning_engine.shutdown()
@@ -240,7 +222,6 @@ class Launcher:
         self._running = False
 
     def restart(self) -> None:
-        """Restart Webster."""
         self.shutdown()
         self.start()
 
@@ -253,7 +234,6 @@ class Launcher:
         return self._initialized
 
     def health(self) -> dict:
-        """Return the overall health of Webster."""
         return {
             "initialized": self._initialized,
             "running": self._running,
