@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from threading import Event, Thread
 
 from core.voice.config import VoiceConfig
 from core.voice.engine import VoiceEngine
@@ -24,6 +25,8 @@ class VoiceManager:
         self._last_input: str | None = None
         self._last_response: str | None = None
         self._last_error: str | None = None
+        self._loop_thread: Thread | None = None
+        self._stop_event = Event()
 
     def initialize(self) -> None:
         if self._initialized:
@@ -40,15 +43,16 @@ class VoiceManager:
         self._running = True
 
     def stop(self) -> None:
+        self._stop_event.set()
         if not self._running:
             return
         self.engine.stop()
         self._running = False
 
     def shutdown(self) -> None:
+        self.stop_voice_loop()
         if not self._initialized:
             return
-        self.stop()
         self.engine.shutdown()
         self._initialized = False
 
@@ -65,11 +69,9 @@ class VoiceManager:
         return self.engine.speak(text)
 
     def set_processor(self, processor: Callable[[str], str] | None) -> None:
-        """Set the AI callback used to turn speech into a response."""
         self._processor = processor
 
     def converse_once(self) -> str | None:
-        """Listen once, send the transcript to AI, and speak the reply."""
         if not self._initialized:
             self.initialize()
 
@@ -95,10 +97,55 @@ class VoiceManager:
             self._last_error = str(error)
             return None
 
+    def start_voice_loop(self) -> bool:
+        """Start continuous listen → think → speak mode in a worker thread."""
+        if self._processor is None:
+            self._last_error = "No voice conversation processor is configured."
+            return False
+
+        if self._loop_thread is not None and self._loop_thread.is_alive():
+            return False
+
+        if not self._initialized:
+            self.initialize()
+
+        self._stop_event.clear()
+        self.start()
+        self._loop_thread = Thread(
+            target=self._voice_loop,
+            name="WebsterVoiceLoop",
+            daemon=True,
+        )
+        self._loop_thread.start()
+        return True
+
+    def stop_voice_loop(self) -> None:
+        """Request the continuous voice loop to stop and release audio."""
+        self._stop_event.set()
+        self.engine.stop()
+        self._running = False
+
+        thread = self._loop_thread
+        if thread is not None and thread.is_alive() and thread is not Thread.current_thread():
+            thread.join(timeout=1.0)
+        self._loop_thread = None
+
+    def _voice_loop(self) -> None:
+        """Worker loop; all AI/TTS failures are contained in one iteration."""
+        while not self._stop_event.is_set():
+            try:
+                self.converse_once()
+            except Exception as error:
+                self._last_error = str(error)
+                if self._stop_event.wait(0.2):
+                    break
+
     def health(self) -> dict:
+        thread = self._loop_thread
         return {
             "initialized": self._initialized,
             "running": self._running,
+            "voice_loop_running": bool(thread and thread.is_alive()),
             "processor_configured": self._processor is not None,
             "last_input": self._last_input,
             "last_response": self._last_response,
