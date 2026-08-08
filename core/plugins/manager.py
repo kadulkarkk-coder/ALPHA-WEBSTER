@@ -14,6 +14,8 @@ class PluginManager:
         self
     ) -> None:
 
+        self._initialized = False
+
         self._plugins: dict[
             str,
             Plugin
@@ -27,6 +29,148 @@ class PluginManager:
         return len(
             self._plugins
         )
+
+    # =====================================================
+    # State
+    # =====================================================
+
+    @property
+    def initialized(
+        self,
+    ) -> bool:
+
+        return self._initialized
+
+    # -----------------------------------------------------
+
+    @property
+    def ready(
+        self,
+    ) -> bool:
+
+        return self._initialized
+
+    # =====================================================
+    # Lifecycle
+    # =====================================================
+
+    def initialize(
+        self,
+    ) -> None:
+        """
+        Initialize the plugin subsystem.
+
+        Plugin discovery/loading remains controlled by the
+        existing PluginManager implementation.
+        """
+
+        if self._initialized:
+
+            return
+
+        #
+        # Ensure existing plugin collections are available.
+        #
+
+        if not hasattr(
+            self,
+            "_plugins",
+        ):
+
+            self._plugins = {}
+
+        #
+        # Mark the manager as ready.
+        #
+
+        self._initialized = True
+
+    # -----------------------------------------------------
+
+    def shutdown(
+        self,
+    ) -> None:
+        """
+        Shutdown the plugin subsystem.
+
+        Loaded plugin objects are not automatically deleted.
+        The existing plugin lifecycle remains responsible
+        for unloading individual plugins.
+        """
+
+        if not self._initialized:
+
+            return
+
+        self._initialized = False
+
+    # =====================================================
+    # Health
+    # =====================================================
+
+    def health(
+        self,
+    ) -> dict:
+        """
+        Return PluginManager health information.
+        """
+
+        plugin_count = 0
+
+        #
+        # Detect the existing plugin collection without
+        # changing the manager's architecture.
+        #
+
+        if hasattr(
+            self,
+            "_plugins",
+        ):
+
+            plugin_count = len(
+                self._plugins
+            )
+
+        elif hasattr(
+            self,
+            "_loaded_plugins",
+        ):
+
+            plugin_count = len(
+                self._loaded_plugins
+            )
+
+        return {
+
+            "initialized": self._initialized,
+
+            "healthy": self._initialized,
+
+            "ready": self._initialized,
+
+            "plugins": plugin_count,
+
+        }
+
+    # =====================================================
+    # Internal Validation
+    # =====================================================
+
+    def _ensure_initialized(
+        self,
+    ) -> None:
+        """
+        Ensure the plugin manager is ready.
+        """
+
+        if not self._initialized:
+
+            raise RuntimeError(
+
+                "PluginManager has not been initialized. "
+                "Call initialize() first."
+
+            )
 
     def register(
         self,

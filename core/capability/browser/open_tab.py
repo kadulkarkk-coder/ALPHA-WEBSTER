@@ -27,7 +27,7 @@ class OpenTabCapability(BrowserCapability):
 
         super().__init__(
             name="open_tab",
-            capability_type=CapabilityType.BROWSER,
+            capability_type=CapabilityType.WEB,
             category=CapabilityCategory.NETWORK,
             permissions=(
                 CapabilityPermission.NETWORK,

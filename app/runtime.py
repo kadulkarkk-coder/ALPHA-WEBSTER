@@ -45,6 +45,10 @@ class Runtime:
 
         self._messaging: MessagingManager | None = None
 
+        self._initialized = False
+
+        self._running = False
+
     # =====================================================
     # Capability Engine
     # =====================================================
@@ -216,8 +220,180 @@ class Runtime:
             self._services is not None
             and self._capability_engine is not None
             and self._planning_engine is not None
+            and self._ai is not None
+            and self._initialized is not None
+            and self._memory is not None
+            and self._conversation is not None
+            and self._events is not None
+            and self._messaging is not None
+            and self._plugins is not None
         )
 
+    # -----------------------------------------------------
+
+    @property
+    def running(
+        self,
+    ) -> bool:
+
+        return self._running
+
+    # -----------------------------------------------------
+
+    @property
+    def ready(
+        self,
+    ) -> bool:
+
+        return (
+
+            self._initialized
+
+            and self._running
+
+        )
+
+    @property
+    def is_healthy(
+        self,
+    ) -> bool:
+
+        return self.ready
+
+    # =====================================================
+    # Lifecycle
+    # =====================================================
+
+    def initialize(
+        self,
+    ) -> None:
+        """
+        Initialize the Webster runtime container.
+
+        Runtime initialization prepares the runtime itself.
+        Individual subsystems are initialized by Launcher.
+        """
+
+        if self._initialized:
+
+            return
+
+        #
+        # Ensure the runtime state exists.
+        #
+
+        if not hasattr(
+            self,
+            "services",
+        ):
+
+            self.services = None
+
+        if not hasattr(
+            self,
+            "provider",
+        ):
+
+            self.provider = None
+
+        if not hasattr(
+            self,
+            "memory",
+        ):
+
+            self.memory = None
+
+        if not hasattr(
+            self,
+            "conversation",
+        ):
+
+            self.conversation = None
+
+        if not hasattr(
+            self,
+            "plugins",
+        ):
+
+            self.plugins = None
+
+        if not hasattr(
+            self,
+            "events",
+        ):
+
+            self.events = None
+
+        if not hasattr(
+            self,
+            "messaging",
+        ):
+
+            self.messaging = None
+
+        if not hasattr(
+            self,
+            "capability_engine",
+        ):
+
+            self.capability_engine = None
+
+        if not hasattr(
+            self,
+            "planning_engine",
+        ):
+
+            self.planning_engine = None
+
+        if not hasattr(
+            self,
+            "ai",
+        ):
+
+            self.ai = None
+
+        self._initialized = True
+
+    # -----------------------------------------------------
+
+    def start(
+        self,
+    ) -> None:
+        """
+        Start the Webster runtime.
+        """
+
+        if self._running:
+
+            return
+
+        if not self._initialized:
+
+            self.initialize()
+
+        self._running = True
+
+    # -----------------------------------------------------
+
+    def shutdown(
+        self,
+    ) -> None:
+        """
+        Stop the Webster runtime.
+
+        Runtime shutdown only changes runtime state.
+        Individual subsystems are shut down by Launcher.
+        """
+
+        if not self._running:
+
+            return
+
+        self._running = False
+
+
+
+    
     # -----------------------------------------------------
 
     def clear(self) -> None:
@@ -234,30 +410,59 @@ class Runtime:
 
         self._services = None
 
-    # -----------------------------------------------------
+    # =====================================================
+    # Health
+    # =====================================================
 
-    def health(self) -> dict:
+    def health(
+        self,
+    ) -> dict:
         """
-        Returns runtime health information.
+        Return the current runtime health.
         """
 
-        return {
-
-            "initialized": self.initialized,
+        components = {
 
             "services": self.services is not None,
 
-            "capabilities": self.capabilities is not None,
-
-            "planning": self.planning is not None,
-
-            "ai": self.ai is not None,
+            "provider": self.provider is not None,
 
             "memory": self.memory is not None,
 
-            "conversation": self.conversation is not None,
+            "conversation": (
+                self.conversation is not None
+            ),
+
+            "plugins": self.plugins is not None,
 
             "events": self.events is not None,
+
+            "messaging": (
+                self.messaging is not None
+            ),
+
+            "capabilities": (
+                self.capability_engine is not None
+            ),
+
+            "planning": (
+                self.planning_engine is not None
+            ),
+
+            "ai": self.ai is not None,
+
+        }
+
+        return {
+
+            "initialized": self._initialized,
+
+            "running": self._running,
+
+            "healthy": self.ready,
+
+            "components": components,
+
         }
 
     # -----------------------------------------------------

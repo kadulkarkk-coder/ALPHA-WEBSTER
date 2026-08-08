@@ -28,7 +28,7 @@ class WebSearchCapability(BrowserCapability):
 
         super().__init__(
             name="web_search",
-            capability_type=CapabilityType.BROWSER,
+            capability_type=CapabilityType.WEB,
             category=CapabilityCategory.NETWORK,
             permissions=(
                 CapabilityPermission.NETWORK,

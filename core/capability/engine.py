@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from core.capability.capability import Capability
 from core.capability.manager import CapabilityManager
+from core.capability.registry import CapabilityRegistry
 from core.capability.request import CapabilityRequest
 from core.capability.result import CapabilityResult
 from core.events.event import Event
@@ -25,20 +26,205 @@ class CapabilityEngine:
 
     def __init__(
         self,
-
         manager: CapabilityManager,
         event_bus: EventBus | None = None,
+        registry: CapabilityRegistry | None = None,
     ) -> None:
 
         if manager is None:
             raise ValueError("CapabilityEngine requires a CapabilityManager to be injected")
 
+        self._initialized = False
         self._manager = manager
         self._event_bus = event_bus
+        self._registry = registry
         # execution statistics
         self._execution_count: int = 0
         self._success_count: int = 0
         self._failure_count: int = 0
+        
+
+    # =====================================================
+    # State
+    # =====================================================
+
+    @property
+    def initialized(
+        self,
+    ) -> bool:
+
+        return self._initialized
+
+    # -----------------------------------------------------
+
+    @property
+    def ready(
+        self,
+    ) -> bool:
+
+        return (
+
+            self._initialized
+
+            and getattr(
+                self,
+                "registry",
+                None,
+            ) is not None
+
+        )
+
+    # =====================================================
+    # Lifecycle
+    # =====================================================
+
+    def initialize(
+        self,
+    ) -> None:
+        """
+        Initialize the capability engine.
+
+        Capability registration is expected to have already
+        been performed by the Launcher before the engine
+        becomes available to the application.
+        """
+
+        if self._initialized:
+
+            return
+
+        #
+        # Verify the core capability infrastructure exists.
+        #
+
+        if self._registry is None:
+
+            raise RuntimeError(
+
+                "CapabilityEngine requires a "
+                "CapabilityRegistry."
+
+            )
+
+        #
+        # The engine is now ready.
+        #
+
+        self._initialized = True
+
+    # -----------------------------------------------------
+
+    def shutdown(
+        self,
+    ) -> None:
+        """
+        Shutdown the capability engine.
+
+        Registered capabilities are deliberately preserved.
+        The Launcher owns their registration.
+        """
+
+        if not self._initialized:
+
+            return
+
+        self._initialized = False
+
+    # =====================================================
+    # Internal Validation
+    # =====================================================
+
+    def _ensure_initialized(
+        self,
+    ) -> None:
+        """
+        Ensure the capability engine is ready.
+        """
+
+        if not self._initialized:
+
+            raise RuntimeError(
+
+                "CapabilityEngine has not been "
+                "initialized. Call initialize() first."
+
+            )
+
+    # =====================================================
+    # Health
+    # =====================================================
+
+    def health(
+        self,
+    ) -> dict:
+        """
+        Return capability engine health information.
+        """
+
+        count = 0
+
+        #
+        # Support the existing registry/count API without
+        # forcing a new registry implementation.
+        #
+
+        if hasattr(
+            self,
+            "capability_count",
+        ):
+
+            try:
+
+                count = self.capability_count
+
+            except Exception:
+
+                count = 0
+
+        elif hasattr(
+            self,
+            "count",
+        ):
+
+            try:
+
+                count = self.count
+
+            except Exception:
+
+                count = 0
+
+        elif hasattr(
+            self,
+            "registry",
+        ):
+
+            registry = self.registry
+
+            if hasattr(
+                registry,
+                "count",
+            ):
+
+                try:
+
+                    count = registry.count
+
+                except Exception:
+
+                    count = 0
+
+        return {
+
+            "initialized": self._initialized,
+
+            "healthy": self.ready,
+
+            "ready": self.ready,
+
+            "capabilities": count,
+
+        }
 
     #
     # ---------------------------------------------------------
@@ -86,6 +272,7 @@ class CapabilityEngine:
         """
         Execute a capability request.
         """
+        self._ensure_initialized()
 
         # Ensure capability exists
         try:

@@ -18,30 +18,158 @@ class ProviderManager:
     """
     Manages all AI providers.
 
-    Responsible for
+    Responsibilities
+    ----------------
 
-    • registration
-
-    • lookup
-
-    • provider selection
-
-    • fallback
-
-    • health monitoring
-
+    • Provider registration
+    • Provider lookup
+    • Default provider selection
+    • Provider initialization
+    • Provider shutdown
+    • Provider fallback
     • AI generation
+    • Streaming
+    • Provider health monitoring
     """
 
-    def __init__(self) -> None:
+    # =====================================================
+    # Construction
+    # =====================================================
 
-        self._providers: dict[str, Provider] = {}
+    def __init__(
+        self,
+    ) -> None:
+        """
+        Create the provider manager.
+
+        Providers are registered first and initialized
+        later by initialize().
+        """
+
+        self._providers: dict[
+            str,
+            Provider,
+        ] = {}
 
         self._default: str | None = None
 
-    # ---------------------------------------------------------
+        self._initialized = False
+
+    # =====================================================
+    # Lifecycle
+    # =====================================================
+
+    def initialize(
+        self,
+    ) -> None:
+        """
+        Initialize all enabled providers.
+
+        Initialization is idempotent, meaning calling
+        initialize() multiple times does not repeatedly
+        initialize providers.
+        """
+
+        if self._initialized:
+
+            return
+
+        #
+        # Initialize registered providers.
+        #
+
+        for provider in self._providers.values():
+
+            if not provider.enabled:
+
+                continue
+
+            provider.initialize()
+
+        #
+        # Make sure a default provider exists.
+        #
+
+        if self._default is None:
+
+            for provider in self._providers.values():
+
+                if provider.enabled:
+
+                    self._default = (
+                        provider.name.lower()
+                    )
+
+                    break
+
+        self._initialized = True
+
+    # -----------------------------------------------------
+
+    def shutdown(
+        self,
+    ) -> None:
+        """
+        Shutdown all registered providers.
+        """
+
+        if not self._initialized:
+
+            return
+
+        #
+        # Shutdown providers.
+        #
+
+        for provider in self._providers.values():
+
+            try:
+
+                provider.shutdown()
+
+            except Exception:
+                #
+                # One provider failing to shut down should
+                # not prevent the remaining providers from
+                # being shut down.
+                #
+
+                continue
+
+        self._initialized = False
+
+    # =====================================================
+    # State
+    # =====================================================
+
+    @property
+    def initialized(
+        self,
+    ) -> bool:
+
+        return self._initialized
+
+    @property
+    def ready(
+        self,
+    ) -> bool:
+
+        if not self._initialized:
+
+            return False
+
+        return any(
+
+            provider.available()
+
+            for provider
+            in self._providers.values()
+
+        )
+
+    # =====================================================
     # Registration
-    # ---------------------------------------------------------
+    # =====================================================
 
     def register(
         self,
@@ -49,57 +177,135 @@ class ProviderManager:
     ) -> None:
         """
         Register an AI provider.
+
+        If the manager has already been initialized,
+        the provider is initialized immediately.
         """
 
-        self._providers[
-            provider.name.lower()
-        ] = provider
+        if provider is None:
+
+            raise ValueError(
+                "Provider cannot be None."
+            )
+
+        name = provider.name.strip().lower()
+
+        if not name:
+
+            raise ValueError(
+                "Provider name cannot be empty."
+            )
+
+        #
+        # Store provider.
+        #
+
+        self._providers[name] = provider
+
+        #
+        # Automatically select the first provider.
+        #
 
         if self._default is None:
 
-            self._default = provider.name.lower()
+            self._default = name
 
-    # ---------------------------------------------------------
+        #
+        # If the manager is already running, initialize
+        # the newly registered provider immediately.
+        #
+
+        if self._initialized and provider.enabled:
+
+            provider.initialize()
+
+    # -----------------------------------------------------
 
     def unregister(
         self,
         name: str,
     ) -> None:
+        """
+        Remove a provider.
+        """
 
-        name = name.lower()
+        key = name.strip().lower()
 
-        self._providers.pop(
-            name,
+        provider = self._providers.pop(
+
+            key,
+
             None,
+
         )
 
-        if self._default == name:
+        if provider is not None:
+
+            try:
+
+                provider.shutdown()
+
+            except Exception:
+
+                pass
+
+        #
+        # Select another provider if the default was removed.
+        #
+
+        if self._default == key:
 
             self._default = None
 
-    # ---------------------------------------------------------
+            for candidate in self._providers.values():
+
+                if candidate.enabled:
+
+                    self._default = (
+                        candidate.name.lower()
+                    )
+
+                    break
+
+    # =====================================================
     # Lookup
-    # ---------------------------------------------------------
+    # =====================================================
 
     def has(
         self,
         name: str,
     ) -> bool:
 
-        return name.lower() in self._providers
+        return (
 
-    # ---------------------------------------------------------
+            name.strip().lower()
+
+            in self._providers
+
+        )
+
+    # -----------------------------------------------------
 
     def get(
         self,
         name: str,
     ) -> Provider:
 
-        return self._providers[
-            name.lower()
-        ]
+        key = name.strip().lower()
 
-    # ---------------------------------------------------------
+        try:
+
+            return self._providers[key]
+
+        except KeyError:
+
+            raise KeyError(
+
+                f"Unknown provider '{name}'."
+
+            ) from None
+
+    # -----------------------------------------------------
 
     @property
     def default_provider(
@@ -109,25 +315,23 @@ class ProviderManager:
         if self._default is None:
 
             raise RuntimeError(
-
                 "No default AI provider configured."
-
             )
 
         return self._providers[
             self._default
         ]
 
-    # ---------------------------------------------------------
+    # -----------------------------------------------------
 
     def set_default(
         self,
         name: str,
     ) -> None:
 
-        name = name.lower()
+        key = name.strip().lower()
 
-        if name not in self._providers:
+        if key not in self._providers:
 
             raise KeyError(
 
@@ -135,31 +339,44 @@ class ProviderManager:
 
             )
 
-        self._default = name
+        self._default = key
 
-    # ---------------------------------------------------------
-    # AI
-    # ---------------------------------------------------------
+    # =====================================================
+    # AI Generation
+    # =====================================================
 
     def generate(
         self,
         request: AIRequest,
     ) -> AIResponse:
         """
-        Generate a response.
+        Generate an AI response.
 
-        Automatically falls back
-        to another provider if the
-        default provider is unavailable.
+        Uses the default provider first and automatically
+        falls back to another available provider.
         """
 
+        if not self._initialized:
+
+            self.initialize()
+
         provider = self.default_provider
+
+        #
+        # Default provider.
+        #
 
         if provider.available():
 
             return provider.generate(
+
                 request
+
             )
+
+        #
+        # Fallback providers.
+        #
 
         for candidate in self._providers.values():
 
@@ -170,7 +387,9 @@ class ProviderManager:
                 )
 
                 return candidate.generate(
+
                     request
+
                 )
 
         raise RuntimeError(
@@ -179,22 +398,42 @@ class ProviderManager:
 
         )
 
-    # ---------------------------------------------------------
+    # -----------------------------------------------------
 
     def stream(
         self,
         request: AIRequest,
     ) -> Iterator[str]:
+        """
+        Stream an AI response.
+
+        Uses the default provider first and falls back
+        to another available provider if necessary.
+        """
+
+        if not self._initialized:
+
+            self.initialize()
 
         provider = self.default_provider
+
+        #
+        # Default provider.
+        #
 
         if provider.available():
 
             yield from provider.stream(
+
                 request
+
             )
 
             return
+
+        #
+        # Fallback providers.
+        #
 
         for candidate in self._providers.values():
 
@@ -205,7 +444,9 @@ class ProviderManager:
                 )
 
                 yield from candidate.stream(
+
                     request
+
                 )
 
                 return
@@ -216,33 +457,9 @@ class ProviderManager:
 
         )
 
-    # ---------------------------------------------------------
-    # Initialization
-    # ---------------------------------------------------------
-
-    def initialize(
-        self,
-    ) -> None:
-
-        for provider in self._providers.values():
-
-            if provider.enabled:
-
-                provider.initialize()
-
-    # ---------------------------------------------------------
-
-    def shutdown(
-        self,
-    ) -> None:
-
-        for provider in self._providers.values():
-
-            provider.shutdown()
-
-    # ---------------------------------------------------------
+    # =====================================================
     # Information
-    # ---------------------------------------------------------
+    # =====================================================
 
     @property
     def provider_count(
@@ -250,8 +467,12 @@ class ProviderManager:
     ) -> int:
 
         return len(
+
             self._providers
+
         )
+
+    # -----------------------------------------------------
 
     @property
     def providers(
@@ -259,44 +480,71 @@ class ProviderManager:
     ) -> list[str]:
 
         return list(
+
             self._providers.keys()
+
         )
 
-    # ---------------------------------------------------------
+    # =====================================================
+    # Health
+    # =====================================================
 
     def health(
         self,
     ) -> dict:
+        """
+        Return provider subsystem health.
+        """
+
+        provider_health = {
+
+            name: provider.health()
+
+            for name, provider
+            in self._providers.items()
+
+        }
+
+        available = any(
+
+            provider.available()
+
+            for provider
+            in self._providers.values()
+
+        )
 
         return {
 
-            "healthy": any(
+            "initialized": self._initialized,
 
-                provider.available()
+            "healthy": (
 
-                for provider in self._providers.values()
+                self._initialized
+                and available
+
+            ),
+
+            "ready": (
+
+                self._initialized
+                and available
 
             ),
 
             "default": self._default,
 
-            "providers": {
-
-                name: provider.health()
-
-                for name, provider in self._providers.items()
-
-            },
+            "providers": provider_health,
 
             "count": len(
-
                 self._providers
-
             ),
 
         }
 
-    # ---------------------------------------------------------
+    # =====================================================
+    # Representation
+    # =====================================================
 
     def __repr__(
         self,
@@ -305,6 +553,8 @@ class ProviderManager:
         return (
 
             "ProviderManager("
+
+            f"initialized={self._initialized}, "
 
             f"providers={len(self._providers)}, "
 

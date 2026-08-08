@@ -35,8 +35,8 @@ class BackCapability(BrowserCapability):
 
         super().__init__(
             name="browser_back",
-            capability_type=CapabilityType.BROWSER,
-            category=CapabilityCategory.NETWORK,
+            capability_type=CapabilityType.WEB,
+            category=CapabilityCategory.INTERNET,
             permissions=(
                 CapabilityPermission.NETWORK,
             ),

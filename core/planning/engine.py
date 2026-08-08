@@ -42,6 +42,7 @@ class PlanningEngine:
         analyzer: GoalAnalyzer,
         decomposer: TaskDecomposer,
         event_bus: EventBus | None = None,
+        registry: CapabilityRegistry | None = None,
     ) -> None:
 
         # All dependencies must be injected. Do not construct them here.
@@ -79,6 +80,76 @@ class PlanningEngine:
 
         self._event_bus = event_bus
 
+        self._initialized = False
+
+        self._registry = registry
+
+    # =====================================================
+    # Lifecycle
+    # =====================================================
+
+    def initialize(
+        self,
+    ) -> None:
+        """
+        Initialize the capability engine.
+
+        Capabilities are registered before initialization.
+        Initialization only makes the engine available for
+        runtime execution.
+        """
+
+        if self._initialized:
+
+            return
+
+        if self._registry is None:
+
+            raise RuntimeError(
+                "CapabilityEngine requires "
+                "a CapabilityRegistry."
+            )
+
+        self._initialized = True
+
+        # -----------------------------------------------------
+
+    def shutdown(
+        self,
+    ) -> None:
+        """
+        Shut down the capability engine.
+
+        Registered capabilities are preserved so Webster
+        can be restarted without rebuilding the registry.
+        """
+
+        if not self._initialized:
+
+            return
+
+        self._initialized = False
+
+    # =====================================================
+    # Internal Validation
+    # =====================================================
+
+    def _ensure_initialized(
+        self,
+    ) -> None:
+        """
+        Ensure the capability engine is ready.
+        """
+
+        if not self._initialized:
+
+            raise RuntimeError(
+                "CapabilityEngine has not been "
+                "initialized. Call initialize() first."
+            )
+
+
+
     # =====================================================
     # Properties
     # =====================================================
@@ -107,6 +178,36 @@ class PlanningEngine:
     def executor(self) -> Executor:
 
         return self._executor
+
+    # =====================================================
+    # State
+    # =====================================================
+
+    @property
+    def initialized(
+        self,
+    ) -> bool:
+
+        return self._initialized
+
+    # -----------------------------------------------------
+
+    @property
+    def ready(
+        self,
+    ) -> bool:
+
+        return (
+
+            self._initialized
+
+            and getattr(
+                self,
+                "registry",
+                None,
+            ) is not None
+
+        )
 
     # =====================================================
     # Planning
@@ -336,8 +437,32 @@ class PlanningEngine:
     # -----------------------------------------------------
 
     def health(self) -> dict:
+        """
+        Return capability engine health information.
+        """
+
+        count = 0
+
+        try:
+
+            count = self.capability_count
+
+        except Exception:
+
+            try:
+
+                count = self.registry.count
+
+            except Exception:
+
+                count = 0
 
         return {
+
+            "initialized": self._initialized,
+            "ready": self.ready,
+            "healthy": self.ready,
+            "capabilities": count,
             "active_goals": getattr(self.manager, "goal_count", 0),
             "active_plans": self.plan_count,
             "task_count": getattr(self.manager, "task_count", 0),

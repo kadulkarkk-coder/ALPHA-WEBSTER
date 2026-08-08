@@ -1,80 +1,33 @@
 """
 Webster Alpha
 
-Open URL Capability
+Browser Capability Base Class
 """
 
 from __future__ import annotations
 
-import webbrowser
+from abc import ABC
+from abc import abstractmethod
 
-
+from core.capability.capability import Capability
 from core.capability.request import CapabilityRequest
 from core.capability.result import CapabilityResult
-from core.capability.types import (
-    CapabilityCategory,
-    CapabilityPermission,
-    CapabilityType,
-)
 
 
-class OpenUrlCapability(BrowserCapability):
+class BrowserCapability(
+    Capability,
+    ABC,
+):
     """
-    Opens a URL in the user's default browser.
+    Base class for all browser capabilities.
     """
 
-    def __init__(self) -> None:
-
-        super().__init__(
-            name="open_url",
-            capability_type=CapabilityType.BROWSER,
-            category=CapabilityCategory.NETWORK,
-            permissions=(
-                CapabilityPermission.NETWORK,
-            ),
-        )
-
+    @abstractmethod
     def execute(
         self,
         request: CapabilityRequest,
     ) -> CapabilityResult:
-
-        try:
-
-            url = self.get_string(
-                request,
-                "url",
-            ).strip()
-
-            if not url:
-                raise ValueError(
-                    "URL cannot be empty."
-                )
-
-            if not (
-                url.startswith("http://")
-                or url.startswith("https://")
-            ):
-                url = f"https://{url}"
-
-            opened = webbrowser.open(
-                url,
-                new=2,
-            )
-
-            if not opened:
-                raise RuntimeError(
-                    "Failed to open the browser."
-                )
-
-            return CapabilityResult.success_result(
-                output=url,
-                url=url,
-                opened=True,
-            )
-
-        except Exception as error:
-
-            return CapabilityResult.failure_result(
-                error=str(error),
-            )
+        """
+        Execute the browser capability.
+        """
+        raise NotImplementedError

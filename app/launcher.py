@@ -9,13 +9,17 @@ from __future__ import annotations
 from app.runtime import Runtime
 
 from core.capability.browser.back import BackCapability
-from core.capability.browser.base import OpenUrlCapability
+from core.capability.browser.open_url import OpenUrlCapability
 from core.capability.browser.refresh import RefreshCapability
 from core.capability.file.create_folder import CreateFolderCapability
 from core.capability.file.delete import DeleteFileCapability
 from core.capability.file.rename import RenameFileCapability
+from core.capability.packs import application
+from core.capability.registry import CapabilityRegistry
 from core.container.service_registry import ServiceRegistry
-
+from core.planning import analyzer, decomposer
+from core.planning.analyzer import GoalAnalyzer
+from core.planning.decomposer import TaskDecomposer
 from core.capability.engine import CapabilityEngine
 from core.capability.manager import CapabilityManager
 
@@ -32,6 +36,7 @@ from core.conversation.manager import ConversationManager
 from core.plugins.manager import PluginManager
 from core.events.event_bus import EventBus
 from core.messaging.manager import MessagingManager
+from core.provider.ollama import OllamaProvider
 from core.provider.manager import ProviderManager
 
 # =====================================================
@@ -52,44 +57,163 @@ from core.provider.ollama import OllamaProvider
 
 class Launcher:
     """
-    Responsible for constructing and initializing
-    every runtime subsystem used by Webster.
+    Responsible for constructing and bootstrapping
+    every Webster runtime subsystem.
     """
 
-    def __init__(self) -> None:
-        """
-        Create the Webster launcher and instantiate every
-        long-lived subsystem.
+    # =====================================================
+    # Construction
+    # =====================================================
+    # =====================================================
+    # Construction
+    # =====================================================
 
-        Heavy initialization is performed later by start().
+    def __init__(
+        self,
+    ) -> None:
+        """
+        Construct every long-lived Webster object.
+
+        Objects are CREATED here only.
+
+        Registration and initialization happen
+        inside initialize().
         """
 
         #
+        # -------------------------------------------------
+        # State
+        # -------------------------------------------------
+        #
+
+        self._initialized = False
+
+        self._running = False
+
+        #
+        # -------------------------------------------------
         # Runtime
+        # -------------------------------------------------
         #
 
-        self.runtime = Runtime()
+        self._runtime = Runtime()
+
+        self._application = None
 
         #
-        # Core Managers
+        # -------------------------------------------------
+        # Infrastructure
+        # -------------------------------------------------
         #
-
-        self.service_registry = ServiceRegistry()
-
-        self.provider_manager = ProviderManager()
-
-        self.plugin_manager = PluginManager()
-
-        self.memory_manager = MemoryManager()
-
-        self.conversation_manager = ConversationManager()
-
-        self.messaging_manager = MessagingManager()
 
         self.event_bus = EventBus()
 
+        self.service_registry = ServiceRegistry()
+
+        self.plugin_manager = PluginManager()
+
+        self.messaging_manager = MessagingManager()
+
         #
+        # -------------------------------------------------
+        # Memory & Conversation
+        # -------------------------------------------------
+        #
+
+        self.memory_manager = MemoryManager(
+
+            event_bus=self.event_bus,
+
+        )
+
+        self.conversation_manager = ConversationManager(
+
+            memory=self.memory_manager,
+
+            event_bus=self.event_bus,
+
+        )
+
+        #
+        # -------------------------------------------------
+        # Capability System
+        # -------------------------------------------------
+        #
+
+        self.capability_registry = CapabilityRegistry()
+
+        self.capability_manager = CapabilityManager(
+            registry=self.capability_registry,
+        )
+
+        self.capability_engine = CapabilityEngine(
+
+            registry=self.capability_registry,
+            
+            manager=self.capability_manager,
+
+            event_bus=self.event_bus,
+
+        )
+
+        #
+        # -------------------------------------------------
+        # Planning System
+        # -------------------------------------------------
+        #
+
+        self.plan_registry = CapabilityRegistry()
+
+        self.planning_manager = PlanningManager()
+
+        self._planner = Planner(
+
+            registry=self.plan_registry,
+
+        )
+
+        self.validator = Validator(registry=self.plan_registry)
+
+        self.executor = Executor(capability_engine=self.capability_engine)
+
+        self.goal_analyzer = GoalAnalyzer()
+
+        self.task_decomposer = TaskDecomposer()
+
+        self.planning_engine = PlanningEngine(
+
+            capability_engine=self.capability_engine,
+
+            manager=self.planning_manager,
+
+            planner=self._planner,
+
+            validator=self.validator,
+
+            executor=self.executor,
+
+            analyzer=self.goal_analyzer,
+
+            decomposer=self.task_decomposer,
+
+            event_bus=self.event_bus,
+            registry=self.plan_registry
+
+        )
+
+        #
+        # -------------------------------------------------
+        # Provider System
+        # -------------------------------------------------
+        #
+
+        self.provider_manager = ProviderManager()
+        self.provider = OllamaProvider()
+
+        #
+        # -------------------------------------------------
         # AI Components
+        # -------------------------------------------------
         #
 
         self.intent_router = IntentRouter()
@@ -99,12 +223,10 @@ class Launcher:
         self.response_builder = ResponseBuilder()
 
         #
-        # Core Engines
+        # -------------------------------------------------
+        # AI Engine
+        # -------------------------------------------------
         #
-
-        self.capability_engine = CapabilityEngine()
-
-        self.planning_engine = PlanningEngine()
 
         self.ai_engine = AIEngine(
 
@@ -112,9 +234,11 @@ class Launcher:
 
             planning_engine=self.planning_engine,
 
-            conversation_manager=self.conversation_manager,
+            capability_engine=self.capability_engine,
 
             memory_manager=self.memory_manager,
+
+            conversation_manager=self.conversation_manager,
 
             router=self.intent_router,
 
@@ -125,79 +249,45 @@ class Launcher:
         )
 
         #
-        # Runtime Registration
+        # -------------------------------------------------
+        # Runtime Wiring
+        # -------------------------------------------------
         #
 
-        self.runtime.services = self.service_registry
+        self._runtime.ai = self.ai_engine
 
-        self.runtime.capability_engine = self.capability_engine
+        self._runtime.memory = self.memory_manager
 
-        self.runtime.planning_engine = self.planning_engine
+        self._runtime.conversation = self.conversation_manager
 
-        self.runtime.ai = self.ai_engine
+        self._runtime.capability_engine = self.capability_engine
 
-        self.runtime.memory = self.memory_manager
+        self._runtime.planning_engine = self.planning_engine
 
-        self.runtime.conversation = self.conversation_manager
+        self._runtime.plugins = self.plugin_manager
 
-        self.runtime.plugins = self.plugin_manager
+        self._runtime.events = self.event_bus
 
-        self.runtime.events = self.event_bus
+        self._runtime.messaging = self.messaging_manager
 
-        self.runtime.messaging = self.messaging_manager
+        self._runtime.services = self.service_registry
 
-        #
-        # State
-        #
 
-        self.running = False
     # =====================================================
-    # Properties
-    # =====================================================
-
-    @property
-    def runtime(self) -> Runtime:
-
-        return self._runtime
-
-    @property
-    def initialized(self) -> bool:
-
-        return self._initialized
-
-    @property
-    def capability_manager(self) -> CapabilityManager:
-
-        return self._capability_manager
-
-    @property
-    def planning_manager(self) -> PlanningManager:
-
-        return self._planning_manager
-
-    # ---------------------------------------------------------
-    # Application
-    # ---------------------------------------------------------
-
-    @property
-    def application(self):
-
-        return self.runtime.application
-
-    # ---------------------------------------------------------
     # Initialization
-    # ---------------------------------------------------------
+    # =====================================================
 
     def initialize(
         self,
     ) -> None:
         """
-        Initialize every Webster subsystem.
+        Initialize Webster.
 
-        This method is safe to call multiple times.
+        This method performs all registrations and
+        subsystem initialization exactly once.
         """
 
-        if self.initialized:
+        if self._initialized:
 
             return
 
@@ -205,11 +295,7 @@ class Launcher:
         # Runtime
         #
 
-        self.runtime.initialize()
-
-        #
-        # Core Managers
-        #
+        self._runtime.initialize()
 
         self.service_registry.initialize()
 
@@ -225,63 +311,90 @@ class Launcher:
 
         self.event_bus.initialize()
 
-        #
-        # Engines
-        #
-
         self.capability_engine.initialize()
 
         self.planning_engine.initialize()
 
         self.ai_engine.initialize()
 
+
         #
-        # Registration
+        # Register Core Services
         #
 
         self._register_services()
 
+        #
+        # Register Providers
+        #
+
         self._register_providers()
+
+        #
+        # Register Capabilities
+        #
 
         self._register_capabilities()
 
+        #
+        # Register Workflows
+        #
+
         self._register_workflows()
 
-        self._register_providers()
-        
         #
-        # Runtime References
+        # Runtime Wiring
         #
 
-        self.runtime.services = self.service_registry
+        self._runtime.services = self.service_registry
 
-        self.runtime.providers = self.provider_manager
+        self._runtime.memory = self.memory_manager
 
-        self.runtime.capabilities = self.capability_engine
+        self._runtime.conversation = self.conversation_manager
 
-        self.runtime.planning = self.planning_engine
+        self._runtime.plugins = self.plugin_manager
 
-        self.runtime.ai = self.ai_engine
+        self._runtime.events = self.event_bus
 
-        self.runtime.memory = self.memory_manager
+        self._runtime.messaging = self.messaging_manager
 
-        self.runtime.conversation = self.conversation_manager
+        self._runtime.capability_engine = self.capability_engine
 
-        self.runtime.plugins = self.plugin_manager
+        self._runtime.planning_engine = self.planning_engine
 
-        self.runtime.events = self.event_bus
-
-        self.runtime.messaging = self.messaging_manager
+        self._runtime.ai = self.ai_engine
 
         #
-        # Status
+        # Application
         #
 
-        self.initialized = True
+        if getattr(
 
-    # ---------------------------------------------------------
+            self._runtime,
+
+            "application",
+
+            None,
+
+        ) is None:
+
+            from app.application import Application
+
+            self.application = Application(
+
+                runtime=self._runtime,
+
+            )
+
+        #
+        # Finished
+        #
+
+        self._initialized = True
+
+    # =====================================================
     # Registration
-    # ---------------------------------------------------------
+    # =====================================================
 
     def _register_services(
         self,
@@ -289,10 +402,6 @@ class Launcher:
         """
         Register all Webster services.
         """
-
-        #
-        # Core Services
-        #
 
         self.service_registry.register(
 
@@ -320,34 +429,6 @@ class Launcher:
 
         self.service_registry.register(
 
-            "messaging_manager",
-
-            self.messaging_manager,
-
-        )
-
-        self.service_registry.register(
-
-            "plugin_manager",
-
-            self.plugin_manager,
-
-        )
-
-        self.service_registry.register(
-
-            "event_bus",
-
-            self.event_bus,
-
-        )
-
-        #
-        # Engines
-        #
-
-        self.service_registry.register(
-
             "capability_engine",
 
             self.capability_engine,
@@ -370,22 +451,52 @@ class Launcher:
 
         )
 
-    # ---------------------------------------------------------
+        self.service_registry.register(
+
+            "plugin_manager",
+
+            self.plugin_manager,
+
+        )
+
+        self.service_registry.register(
+
+            "event_bus",
+
+            self.event_bus,
+
+        )
+
+        self.service_registry.register(
+
+            "messaging_manager",
+
+            self.messaging_manager,
+
+        )
+
+    # -----------------------------------------------------
 
     def _register_providers(
         self,
     ) -> None:
         """
-        Register all AI providers.
+        Register AI providers.
         """
 
-        #
-        # Local Providers
-        #
+        from core.provider.ollama import OllamaProvider
+
+        provider = OllamaProvider()
 
         self.provider_manager.register(
 
-            OllamaProvider(),
+            provider,
+
+        )
+
+        self.provider_manager.set_default(
+
+            provider.name,
 
         )
 
@@ -480,11 +591,11 @@ class Launcher:
         Start Webster.
         """
 
-        if self.running:
+        if self._running:
 
             return
 
-        if not self.initialized:
+        if not self._initialized:
 
             self.initialize()
 
@@ -492,7 +603,7 @@ class Launcher:
         # Runtime
         #
 
-        self.runtime.start()
+        self._runtime.start()
 
         #
         # Managers
@@ -522,7 +633,7 @@ class Launcher:
         # Status
         #
 
-        self.running = True
+        self._running = True
 
     # ---------------------------------------------------------
 
@@ -533,7 +644,7 @@ class Launcher:
         Shutdown Webster.
         """
 
-        if not self.running:
+        if not self._running:
 
             return
 
@@ -569,7 +680,7 @@ class Launcher:
         # Runtime
         #
 
-        self.runtime.shutdown()
+        self._runtime.shutdown()
 
         #
         # Status
@@ -604,7 +715,7 @@ class Launcher:
         self,
     ) -> bool:
 
-        return self.initialized
+        return self._initialized
 
     # ---------------------------------------------------------
     # Health
@@ -619,11 +730,11 @@ class Launcher:
 
         return {
 
-            "initialized": self.initialized,
+            "initialized": self._initialized,
 
-            "running": self.running,
+            "running": self._running,
 
-            "runtime": self.runtime.health(),
+            "runtime": self._runtime.health(),
 
             "providers": self.provider_manager.health(),
 
@@ -741,9 +852,9 @@ class Launcher:
 
             "Launcher("
 
-            f"running={self.running}, "
+            f"running={self._running}, "
 
-            f"initialized={self.initialized}, "
+            f"initialized={self._initialized}, "
 
             f"services={self.service_count}, "
 
