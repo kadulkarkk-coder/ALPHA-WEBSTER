@@ -55,7 +55,7 @@ class NullSpeechBackend(SpeechToTextBackend):
 
 
 class MicrophoneSpeechBackend(SpeechToTextBackend):
-    """SpeechRecognition backend with microphone voice-activity detection."""
+    """SpeechRecognition backend with configurable voice activity detection."""
 
     name = "speech_recognition"
 
@@ -65,15 +65,16 @@ class MicrophoneSpeechBackend(SpeechToTextBackend):
         self._available = False
         self._listening = False
         self._speaking = False
+        self._allow_barge_in = False
         self._error: str | None = None
+        self._vad_energy_threshold = 300
+        self._vad_pause_threshold = 0.8
 
     def initialize(self) -> None:
         if self._available:
             return
-
         try:
             import speech_recognition as sr
-
             self._recognizer = sr.Recognizer()
             self._microphone = sr.Microphone()
             self._available = True
@@ -84,32 +85,34 @@ class MicrophoneSpeechBackend(SpeechToTextBackend):
             self._available = False
             self._error = str(error)
 
+    def configure_vad(self, energy_threshold: int = 300, pause_threshold: float = 0.8) -> None:
+        self._vad_energy_threshold = max(0, int(energy_threshold))
+        self._vad_pause_threshold = max(0.1, float(pause_threshold))
+        if self._recognizer is not None:
+            self._recognizer.energy_threshold = self._vad_energy_threshold
+            self._recognizer.dynamic_energy_threshold = True
+            self._recognizer.pause_threshold = self._vad_pause_threshold
+
     def listen(self, timeout: float, phrase_timeout: float) -> str | None:
-        """Wait for voice activity, capture the utterance, then stop at silence."""
         if not self._available:
             self.initialize()
-
-        if self._recognizer is None or self._microphone is None or self._speaking:
+        if self._recognizer is None or self._microphone is None:
+            return None
+        if self._speaking and not self._allow_barge_in:
             return None
 
         try:
             with self._microphone as source:
                 self._listening = True
-
-                # Calibrate only once per microphone session when possible.
-                self._recognizer.adjust_for_ambient_noise(source, duration=0.25)
-
-                # listen() waits for speech energy and ends when speech stops.
+                self.configure_vad(self._vad_energy_threshold, self._vad_pause_threshold)
                 audio = self._recognizer.listen(
                     source,
                     timeout=timeout,
                     phrase_time_limit=phrase_timeout,
                 )
-
             text = self._recognizer.recognize_google(audio)
             return text.strip() or None
         except Exception as error:
-            # Timeout/no speech is normal in hands-free mode, not a fatal error.
             if error.__class__.__name__ == "WaitTimeoutError":
                 return None
             self._error = str(error)
@@ -117,10 +120,10 @@ class MicrophoneSpeechBackend(SpeechToTextBackend):
         finally:
             self._listening = False
 
-    def set_speaking(self, speaking: bool) -> None:
-        """Temporarily disable microphone capture while Webster speaks."""
+    def set_speaking(self, speaking: bool, allow_barge_in: bool = False) -> None:
         self._speaking = speaking
-        if speaking:
+        self._allow_barge_in = allow_barge_in
+        if speaking and not allow_barge_in:
             self._listening = False
 
     def stop(self) -> None:
@@ -134,7 +137,7 @@ class MicrophoneSpeechBackend(SpeechToTextBackend):
 
     @property
     def available(self) -> bool:
-        return self._available and not self._speaking
+        return self._available and (not self._speaking or self._allow_barge_in)
 
     @property
     def listening(self) -> bool:
