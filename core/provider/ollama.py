@@ -6,22 +6,19 @@ Ollama Provider
 
 from __future__ import annotations
 
-from typing import Iterator
-
 import json
+from typing import Iterator
 
 import requests
 
 from core.provider.provider import Provider
-
 from core.ai.request import AIRequest
 from core.ai.response import AIResponse
+from core.ai.types import AIProvider
 
 
 class OllamaProvider(Provider):
-    """
-    Local Ollama AI Provider.
-    """
+    """Local Ollama AI Provider."""
 
     DEFAULT_HOST = "http://127.0.0.1:11434"
 
@@ -33,74 +30,44 @@ class OllamaProvider(Provider):
     ) -> None:
 
         super().__init__(
-
             name="ollama",
-
             version="1.0",
-
         )
 
         self._host = host.rstrip("/")
-
         self._model = model
-
         self._timeout = timeout
-
-    # ---------------------------------------------------------
-    # Initialization
-    # ---------------------------------------------------------
 
     def initialize(
         self,
     ) -> None:
-        """
-        Verify Ollama availability.
-        """
+        """Verify Ollama availability."""
 
         if not self.available():
 
             raise RuntimeError(
-
                 "Ollama server is not running."
-
             )
-
-    # ---------------------------------------------------------
-    # Generation
-    # ---------------------------------------------------------
 
     def generate(
         self,
         request: AIRequest,
     ) -> AIResponse:
-        """
-        Generate a complete response.
-        """
+        """Generate a complete response."""
 
         payload = {
-
             "model": self._model,
-
             "prompt": request.prompt,
-
             "stream": False,
-
             "options": {
-
                 "temperature": request.temperature,
-
             },
-
         }
 
         response = requests.post(
-
             f"{self._host}/api/generate",
-
             json=payload,
-
             timeout=self._timeout,
-
         )
 
         response.raise_for_status()
@@ -108,14 +75,10 @@ class OllamaProvider(Provider):
         data = response.json()
 
         return AIResponse(
-
-            text=data.get("response", ""),
-
+            content=data.get("response", ""),
+            provider=AIProvider.OLLAMA,
+            model=self._model,
         )
-
-    # ---------------------------------------------------------
-    # Streaming
-    # ---------------------------------------------------------
 
     def stream(
         self,
@@ -123,31 +86,19 @@ class OllamaProvider(Provider):
     ) -> Iterator[str]:
 
         payload = {
-
             "model": self._model,
-
             "prompt": request.prompt,
-
             "stream": True,
-
             "options": {
-
                 "temperature": request.temperature,
-
             },
-
         }
 
         response = requests.post(
-
             f"{self._host}/api/generate",
-
             json=payload,
-
             stream=True,
-
             timeout=self._timeout,
-
         )
 
         response.raise_for_status()
@@ -159,18 +110,12 @@ class OllamaProvider(Provider):
                 continue
 
             chunk = json.loads(
-
                 line.decode("utf-8")
-
             )
 
             if "response" in chunk:
 
                 yield chunk["response"]
-
-    # ---------------------------------------------------------
-    # Availability
-    # ---------------------------------------------------------
 
     def available(
         self,
@@ -179,11 +124,8 @@ class OllamaProvider(Provider):
         try:
 
             response = requests.get(
-
                 f"{self._host}/api/tags",
-
                 timeout=3,
-
             )
 
             return response.status_code == 200
@@ -191,10 +133,6 @@ class OllamaProvider(Provider):
         except Exception:
 
             return False
-
-    # ---------------------------------------------------------
-    # Model Management
-    # ---------------------------------------------------------
 
     @property
     def model(
@@ -210,29 +148,16 @@ class OllamaProvider(Provider):
 
         self._model = model
 
-    # ---------------------------------------------------------
-    # Health
-    # ---------------------------------------------------------
-
     def health(
         self,
     ) -> dict:
 
         return {
-
             "healthy": self.available(),
-
             "provider": self.name,
-
             "model": self._model,
-
             "host": self._host,
-
         }
-
-    # ---------------------------------------------------------
-    # Shutdown
-    # ---------------------------------------------------------
 
     def shutdown(
         self,
@@ -240,20 +165,13 @@ class OllamaProvider(Provider):
 
         pass
 
-    # ---------------------------------------------------------
-
     def __repr__(
         self,
     ) -> str:
 
         return (
-
             "OllamaProvider("
-
             f"model='{self._model}', "
-
             f"host='{self._host}'"
-
             ")"
-
         )
