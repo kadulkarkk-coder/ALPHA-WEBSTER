@@ -8,6 +8,8 @@ Public API
 
 from __future__ import annotations
 
+import time
+
 from core.capability.capability import Capability
 from core.capability.manager import CapabilityManager
 from core.capability.registry import CapabilityRegistry
@@ -19,10 +21,7 @@ from core.events.event_types import EventType
 
 
 class CapabilityEngine:
-    """
-    Public interface to Webster's
-    Capability subsystem.
-    """
+    """Public interface to Webster's Capability subsystem."""
 
     def __init__(
         self,
@@ -32,17 +31,18 @@ class CapabilityEngine:
     ) -> None:
 
         if manager is None:
-            raise ValueError("CapabilityEngine requires a CapabilityManager to be injected")
+
+            raise ValueError(
+                "CapabilityEngine requires a CapabilityManager."
+            )
 
         self._initialized = False
         self._manager = manager
         self._event_bus = event_bus
-        self._registry = registry
-        # execution statistics
-        self._execution_count: int = 0
-        self._success_count: int = 0
-        self._failure_count: int = 0
-        
+        self._registry = registry or manager.registry
+        self._execution_count = 0
+        self._success_count = 0
+        self._failure_count = 0
 
     # =====================================================
     # State
@@ -55,24 +55,29 @@ class CapabilityEngine:
 
         return self._initialized
 
-    # -----------------------------------------------------
-
     @property
     def ready(
         self,
     ) -> bool:
 
         return (
-
             self._initialized
-
-            and getattr(
-                self,
-                "registry",
-                None,
-            ) is not None
-
+            and self._registry is not None
         )
+
+    @property
+    def registry(
+        self,
+    ) -> CapabilityRegistry:
+
+        return self._registry
+
+    @property
+    def manager(
+        self,
+    ) -> CapabilityManager:
+
+        return self._manager
 
     # =====================================================
     # Lifecycle
@@ -81,73 +86,36 @@ class CapabilityEngine:
     def initialize(
         self,
     ) -> None:
-        """
-        Initialize the capability engine.
-
-        Capability registration is expected to have already
-        been performed by the Launcher before the engine
-        becomes available to the application.
-        """
 
         if self._initialized:
-
             return
-
-        #
-        # Verify the core capability infrastructure exists.
-        #
 
         if self._registry is None:
 
             raise RuntimeError(
-
-                "CapabilityEngine requires a "
-                "CapabilityRegistry."
-
+                "CapabilityEngine requires a CapabilityRegistry."
             )
 
-        #
-        # The engine is now ready.
-        #
-
         self._initialized = True
-
-    # -----------------------------------------------------
 
     def shutdown(
         self,
     ) -> None:
-        """
-        Shutdown the capability engine.
-
-        Registered capabilities are deliberately preserved.
-        The Launcher owns their registration.
-        """
 
         if not self._initialized:
-
             return
 
         self._initialized = False
 
-    # =====================================================
-    # Internal Validation
-    # =====================================================
-
     def _ensure_initialized(
         self,
     ) -> None:
-        """
-        Ensure the capability engine is ready.
-        """
 
         if not self._initialized:
 
             raise RuntimeError(
-
-                "CapabilityEngine has not been "
-                "initialized. Call initialize() first."
-
+                "CapabilityEngine has not been initialized. "
+                "Call initialize() first."
             )
 
     # =====================================================
@@ -157,140 +125,87 @@ class CapabilityEngine:
     def health(
         self,
     ) -> dict:
-        """
-        Return capability engine health information.
-        """
-
-        count = 0
-
-        #
-        # Support the existing registry/count API without
-        # forcing a new registry implementation.
-        #
-
-        if hasattr(
-            self,
-            "capability_count",
-        ):
-
-            try:
-
-                count = self.capability_count
-
-            except Exception:
-
-                count = 0
-
-        elif hasattr(
-            self,
-            "count",
-        ):
-
-            try:
-
-                count = self.count
-
-            except Exception:
-
-                count = 0
-
-        elif hasattr(
-            self,
-            "registry",
-        ):
-
-            registry = self.registry
-
-            if hasattr(
-                registry,
-                "count",
-            ):
-
-                try:
-
-                    count = registry.count
-
-                except Exception:
-
-                    count = 0
 
         return {
-
             "initialized": self._initialized,
-
             "healthy": self.ready,
-
             "ready": self.ready,
-
-            "capabilities": count,
-
+            "capabilities": self.capability_count(),
+            "executions": self._execution_count,
+            "successes": self._success_count,
+            "failures": self._failure_count,
         }
 
-    #
-    # ---------------------------------------------------------
+    # =====================================================
     # Registration
-    # ---------------------------------------------------------
-    #
+    # =====================================================
 
     def register(
         self,
         capability: Capability,
     ) -> None:
-        """
-        Register a capability.
-        """
 
         self._manager.register(capability)
 
-    def discover_and_register(self, register_callable) -> None:
-        """Register capabilities using a pack's register(registry) callable."""
+    def discover_and_register(
+        self,
+        register_callable,
+    ) -> None:
 
-        register_callable(self._manager.registry)
+        register_callable(
+            self._manager.registry
+        )
 
     def unregister(
         self,
         name: str,
     ) -> None:
-        """
-        Remove a capability.
-        """
 
-        self._manager.unregister(
-            name
-        )
+        self._manager.unregister(name)
 
-    #
-    # ---------------------------------------------------------
+    # =====================================================
     # Execution
-    # ---------------------------------------------------------
-    #
+    # =====================================================
 
     def execute(
         self,
         request: CapabilityRequest,
     ) -> CapabilityResult:
-        """
-        Execute a capability request.
-        """
+
         self._ensure_initialized()
 
-        # Ensure capability exists
         try:
-            cap = self._manager.registry.require(request.capability)
-        except KeyError as err:
-            return CapabilityResult.failure_result(error=str(err))
+
+            cap = self._manager.registry.require(
+                request.capability
+            )
+
+        except KeyError as error:
+
+            self._failure_count += 1
+
+            return CapabilityResult.failure_result(
+                error=str(error)
+            )
 
         if not cap.can_execute(request):
-            return CapabilityResult.failure_result(error=f"Capability '{request.capability}' cannot execute the request")
 
-        import time
+            self._failure_count += 1
 
-        start = time.time()
+            return CapabilityResult.failure_result(
+                error=(
+                    f"Capability '{request.capability}' "
+                    "cannot execute the request"
+                )
+            )
+
+        started = time.time()
 
         try:
+
             result = self._manager.execute(request)
 
-            duration = time.time() - start
+            duration = time.time() - started
 
             self._execution_count += 1
 
@@ -299,10 +214,15 @@ class CapabilityEngine:
             else:
                 self._failure_count += 1
 
-            if hasattr(result, "metadata") and isinstance(result.metadata, dict):
+            if isinstance(
+                getattr(result, "metadata", None),
+                dict,
+            ):
+
                 result.metadata["duration"] = duration
 
             if self._event_bus is not None:
+
                 self._event_bus.publish(
                     Event(
                         name=EventType.CAPABILITY_EXECUTED.name,
@@ -319,13 +239,14 @@ class CapabilityEngine:
             return result
 
         except Exception as error:
-            duration = time.time() - start
+
+            duration = time.time() - started
 
             self._execution_count += 1
-
             self._failure_count += 1
 
             if self._event_bus is not None:
+
                 self._event_bus.publish(
                     Event(
                         name=EventType.CAPABILITY_FAILED.name,
@@ -339,31 +260,28 @@ class CapabilityEngine:
                     )
                 )
 
-            return CapabilityResult.failure_result(error=str(error), duration=duration)
+            return CapabilityResult.failure_result(
+                error=str(error),
+                duration=duration,
+            )
 
-    #
-    # ---------------------------------------------------------
+    # =====================================================
     # Lookup
-    # ---------------------------------------------------------
-    #
+    # =====================================================
 
     def get(
         self,
         name: str,
     ) -> Capability | None:
 
-        return self._manager.get(
-            name
-        )
+        return self._manager.get(name)
 
     def exists(
         self,
         name: str,
     ) -> bool:
 
-        return self._manager.exists(
-            name
-        )
+        return self._manager.exists(name)
 
     def capabilities(
         self,
@@ -377,65 +295,18 @@ class CapabilityEngine:
 
         return self._manager.names()
 
-    #
-    # ---------------------------------------------------------
-    # Access
-    # ---------------------------------------------------------
-    #
-
-    @property
-    def manager(
-        self,
-    ) -> CapabilityManager:
-
-        return self._manager
-
-    #
-    # ---------------------------------------------------------
-    # Utilities
-    # ---------------------------------------------------------
-    #
-
     def capability_count(
         self,
     ) -> int:
 
-        return len(
-            self._manager.registry
-        )
-
-    #
-    # ---------------------------------------------------------
-    # Health
-    # ---------------------------------------------------------
-    #
-
-    def health(self) -> dict:
-
-        return {
-            "registered": self.capability_count(),
-            "categories": self._manager.registry.list_categories(),
-            "executions": self._execution_count,
-            "successes": self._success_count,
-            "failures": self._failure_count,
-        }
-
-    #
-    # ---------------------------------------------------------
-    # Representation
-    # ---------------------------------------------------------
-    #
+        return len(self._manager.registry)
 
     def __repr__(
         self,
     ) -> str:
 
         return (
-
             "CapabilityEngine("
-
             f"capabilities={self.capability_count()}"
-
             ")"
-
         )
