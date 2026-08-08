@@ -46,26 +46,37 @@ class VoiceListener:
             self._listening = False
 
     def listen(self, ignore_wake_word: bool = False) -> str | None:
-        """Wait for speech; normal mode optionally requires the configured wake word."""
+        """Wait for voice activity and return a command when accepted."""
         if not self._initialized:
             self.initialize()
         if not self.config.enabled or not self.config.listen_enabled or not self._backend.available:
             return None
+
         try:
             self._listening = True
-            text = self._backend.listen(
-                timeout=self.config.wake_word_timeout if self.config.wake_word_enabled and not ignore_wake_word else self.config.input_timeout,
-                phrase_timeout=self.config.phrase_timeout,
-            )
+            timeout = self.config.input_timeout
+            if self.config.wake_word_enabled and not ignore_wake_word:
+                timeout = self.config.wake_word_timeout
+
+            text = self._backend.listen(timeout=timeout, phrase_timeout=self.config.phrase_timeout)
             if not text:
+                self._wake_word_detected = False
                 return None
+
             text = text.strip()
             if ignore_wake_word or not self.config.wake_word_enabled:
                 self._wake_word_detected = True
                 return text
+
             command = self._extract_wake_command(text)
-            self._wake_word_detected = command is not None
-            return command or None if command is not None else None
+            if command is None:
+                self._wake_word_detected = False
+                return None
+
+            self._wake_word_detected = True
+            # Saying only the wake word activates Webster; the next listen
+            # cycle collects the actual command.
+            return command if command else None
         except Exception as error:
             self._error = str(error)
             return None
