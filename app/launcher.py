@@ -39,10 +39,21 @@ from core.provider.manager import ProviderManager
 
 
 class Launcher:
-    """Responsible for constructing and bootstrapping Webster."""
+    """
+    Responsible for constructing and bootstrapping
+    every Webster runtime subsystem.
+    """
 
-    def __init__(self) -> None:
-        """Construct all long-lived Webster objects."""
+    def __init__(
+        self,
+    ) -> None:
+        """
+        Construct every long-lived Webster object.
+
+        Objects are CREATED here only.
+        Registration and initialization happen
+        inside initialize().
+        """
 
         self._initialized = False
         self._running = False
@@ -75,8 +86,6 @@ class Launcher:
             event_bus=self.event_bus,
         )
 
-        # Planning must validate against the same registry used by
-        # CapabilityEngine. There must be one capability source of truth.
         self.plan_registry = self.capability_registry
 
         self.planning_manager = PlanningManager()
@@ -135,12 +144,15 @@ class Launcher:
         self._runtime.events = self.event_bus
         self._runtime.messaging = self.messaging_manager
         self._runtime.services = self.service_registry
+        self._runtime.provider = self.provider_manager
 
     # =====================================================
     # Initialization
     # =====================================================
 
-    def initialize(self) -> None:
+    def initialize(
+        self,
+    ) -> None:
         """Initialize Webster exactly once."""
 
         if self._initialized:
@@ -177,10 +189,9 @@ class Launcher:
         self._runtime.ai = self.ai_engine
 
         if self._runtime.application is None:
+
             from app.application import Application
 
-            # Runtime owns the application reference. Launcher exposes it
-            # through the read-only application property below.
             self._runtime.application = Application(
                 runtime=self._runtime,
             )
@@ -191,7 +202,9 @@ class Launcher:
     # Registration
     # =====================================================
 
-    def _register_services(self) -> None:
+    def _register_services(
+        self,
+    ) -> None:
         """Register all Webster services."""
 
         self.service_registry.register(
@@ -239,18 +252,26 @@ class Launcher:
             self.messaging_manager,
         )
 
-    def _register_providers(self) -> None:
+    def _register_providers(
+        self,
+    ) -> None:
         """Register AI providers."""
 
-        self.provider_manager.register(
-            self.provider,
-        )
+        if not self.provider_manager.has(
+            self.provider.name
+        ):
+
+            self.provider_manager.register(
+                self.provider,
+            )
 
         self.provider_manager.set_default(
             self.provider.name,
         )
 
-    def _register_capabilities(self) -> None:
+    def _register_capabilities(
+        self,
+    ) -> None:
         """Register all currently implemented capabilities."""
 
         self.capability_engine.register(
@@ -277,7 +298,9 @@ class Launcher:
             RenameFileCapability()
         )
 
-    def _register_workflows(self) -> None:
+    def _register_workflows(
+        self,
+    ) -> None:
         """Register Webster workflows."""
 
         pass
@@ -286,8 +309,10 @@ class Launcher:
     # Lifecycle
     # =====================================================
 
-    def start(self) -> None:
-        """Start Webster."""
+    def start(
+        self,
+    ) -> None:
+        """Start Webster and its public Application."""
 
         if self._running:
             return
@@ -296,13 +321,26 @@ class Launcher:
             self.initialize()
 
         self._runtime.start()
+
+        application = self._runtime.application
+
+        if application is not None and not application.running:
+            application.start()
+
         self._running = True
 
-    def shutdown(self) -> None:
-        """Shutdown Webster."""
+    def shutdown(
+        self,
+    ) -> None:
+        """Shutdown Webster cleanly."""
 
         if not self._running:
             return
+
+        application = self._runtime.application
+
+        if application is not None and application.running:
+            application.shutdown()
 
         self.ai_engine.shutdown()
         self.planning_engine.shutdown()
@@ -316,7 +354,9 @@ class Launcher:
 
         self._running = False
 
-    def restart(self) -> None:
+    def restart(
+        self,
+    ) -> None:
         """Restart Webster."""
 
         self.shutdown()
@@ -327,18 +367,26 @@ class Launcher:
     # =====================================================
 
     @property
-    def is_running(self) -> bool:
+    def is_running(
+        self,
+    ) -> bool:
+
         return self._running
 
     @property
-    def is_initialized(self) -> bool:
+    def is_initialized(
+        self,
+    ) -> bool:
+
         return self._initialized
 
     # =====================================================
     # Health
     # =====================================================
 
-    def health(self) -> dict:
+    def health(
+        self,
+    ) -> dict:
         """Return the overall health of Webster."""
 
         return {
@@ -359,23 +407,38 @@ class Launcher:
     # =====================================================
 
     @property
-    def service_count(self) -> int:
+    def service_count(
+        self,
+    ) -> int:
+
         return self.service_registry.service_count
 
     @property
-    def provider_count(self) -> int:
+    def provider_count(
+        self,
+    ) -> int:
+
         return self.provider_manager.provider_count
 
     @property
-    def capability_count(self) -> int:
+    def capability_count(
+        self,
+    ) -> int:
+
         return self.capability_engine.capability_count()
 
     @property
-    def workflow_count(self) -> int:
+    def workflow_count(
+        self,
+    ) -> int:
+
         return self.planning_engine.workflow_count
 
     @property
-    def component_count(self) -> int:
+    def component_count(
+        self,
+    ) -> int:
+
         return (
             self.service_count
             + self.provider_count
@@ -388,34 +451,51 @@ class Launcher:
     # =====================================================
 
     @property
-    def ai(self):
+    def ai(
+        self,
+    ):
+
         return self.ai_engine
 
     @property
-    def planner(self):
+    def planner(
+        self,
+    ):
+
         return self.planning_engine
 
     @property
-    def capabilities(self):
+    def capabilities(
+        self,
+    ):
+
         return self.capability_engine
 
     @property
-    def providers(self):
+    def providers(
+        self,
+    ):
+
         return self.provider_manager
 
     @property
-    def services(self):
+    def services(
+        self,
+    ):
+
         return self.service_registry
 
     @property
-    def application(self):
+    def application(
+        self,
+    ):
+
         return self._runtime.application
 
-    # =====================================================
-    # Representation
-    # =====================================================
+    def __repr__(
+        self,
+    ) -> str:
 
-    def __repr__(self) -> str:
         return (
             "Launcher("
             f"running={self._running}, "
