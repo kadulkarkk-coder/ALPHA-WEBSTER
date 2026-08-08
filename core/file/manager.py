@@ -7,10 +7,11 @@ from pathlib import Path
 
 from core.file.errors import FileOperationError
 from core.file.models import FileInfo
+from core.file.safety import FileSafety
 
 
 class FileManager:
-    """Safe, small high-level API over the local filesystem."""
+    """High-level filesystem API with centralized safety validation."""
 
     def __init__(self) -> None:
         self._initialized = False
@@ -25,19 +26,22 @@ class FileManager:
     def initialized(self) -> bool:
         return self._initialized
 
+    def _require_initialized(self) -> None:
+        if not self._initialized:
+            raise FileOperationError(
+                "FileManager has not been initialized. Call initialize() first."
+            )
+
     def _path(self, value: str | Path) -> Path:
-        path = Path(value).expanduser()
-        if not str(path).strip():
-            raise FileOperationError("Path cannot be empty.")
-        return path.resolve()
+        self._require_initialized()
+        return FileSafety.resolve_path(value)
 
     def exists(self, path: str | Path) -> bool:
         return self._path(path).exists()
 
     def info(self, path: str | Path) -> FileInfo:
         target = self._path(path)
-        if not target.exists():
-            raise FileOperationError(f"Path does not exist: {target}")
+        FileSafety.validate_existing(target)
         return FileInfo(
             path=target,
             is_file=target.is_file(),
@@ -47,18 +51,23 @@ class FileManager:
 
     def read(self, path: str | Path, encoding: str = "utf-8") -> str:
         target = self._path(path)
+        FileSafety.validate_existing(target)
+        if not target.is_file():
+            raise FileOperationError(f"Not a file: {target}")
         try:
             return target.read_text(encoding=encoding)
-        except OSError as error:
+        except (OSError, UnicodeError) as error:
             raise FileOperationError(str(error)) from error
 
     def write(self, path: str | Path, content: str, encoding: str = "utf-8") -> Path:
         target = self._path(path)
+        if target.exists() and target.is_dir():
+            raise FileOperationError(f"Cannot write to a directory: {target}")
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding=encoding)
             return target
-        except OSError as error:
+        except (OSError, UnicodeError) as error:
             raise FileOperationError(str(error)) from error
 
     def create(self, path: str | Path, content: str = "") -> Path:
@@ -69,6 +78,8 @@ class FileManager:
 
     def create_folder(self, path: str | Path) -> Path:
         target = self._path(path)
+        if target.exists():
+            raise FileOperationError(f"Path already exists: {target}")
         try:
             target.mkdir(parents=True, exist_ok=False)
             return target
@@ -77,11 +88,11 @@ class FileManager:
 
     def rename(self, path: str | Path, new_name: str) -> Path:
         target = self._path(path)
-        if not target.exists():
-            raise FileOperationError(f"Path does not exist: {target}")
-        if not new_name.strip() or Path(new_name).name != new_name:
-            raise FileOperationError("New name must be a non-empty filename.")
-        destination = target.parent / new_name
+        FileSafety.validate_existing(target)
+        safe_name = FileSafety.validate_name(new_name)
+        destination = target.parent / safe_name
+        if destination.exists():
+            raise FileOperationError(f"Destination already exists: {destination}")
         try:
             return target.rename(destination)
         except OSError as error:
@@ -90,12 +101,14 @@ class FileManager:
     def copy(self, source: str | Path, destination: str | Path) -> Path:
         src = self._path(source)
         dst = self._path(destination)
-        if not src.exists():
-            raise FileOperationError(f"Source does not exist: {src}")
+        FileSafety.validate_existing(src)
+        FileSafety.validate_destination(src, dst)
+        if dst.exists():
+            raise FileOperationError(f"Destination already exists: {dst}")
         try:
             dst.parent.mkdir(parents=True, exist_ok=True)
             if src.is_dir():
-                return Path(shutil.copytree(src, dst, dirs_exist_ok=True))
+                return Path(shutil.copytree(src, dst))
             return Path(shutil.copy2(src, dst))
         except OSError as error:
             raise FileOperationError(str(error)) from error
@@ -103,8 +116,10 @@ class FileManager:
     def move(self, source: str | Path, destination: str | Path) -> Path:
         src = self._path(source)
         dst = self._path(destination)
-        if not src.exists():
-            raise FileOperationError(f"Source does not exist: {src}")
+        FileSafety.validate_existing(src)
+        FileSafety.validate_destination(src, dst)
+        if dst.exists():
+            raise FileOperationError(f"Destination already exists: {dst}")
         try:
             dst.parent.mkdir(parents=True, exist_ok=True)
             return Path(shutil.move(str(src), str(dst)))
@@ -113,8 +128,8 @@ class FileManager:
 
     def delete(self, path: str | Path) -> None:
         target = self._path(path)
-        if not target.exists():
-            raise FileOperationError(f"Path does not exist: {target}")
+        FileSafety.validate_existing(target)
+        FileSafety.validate_delete(target)
         try:
             if target.is_dir():
                 shutil.rmtree(target)
@@ -125,20 +140,33 @@ class FileManager:
 
     def list(self, path: str | Path = ".") -> list[FileInfo]:
         target = self._path(path)
-        if not target.is_dir():
-            raise FileOperationError(f"Not a directory: {target}")
-        return [self.info(item) for item in sorted(target.iterdir(), key=lambda p: p.name.lower())]
+        FileSafety.validate_directory(target)
+        try:
+            return [
+                self.info(item)
+                for item in sorted(target.iterdir(), key=lambda p: p.name.lower())
+            ]
+        except OSError as error:
+            raise FileOperationError(str(error)) from error
 
     def search(self, root: str | Path, pattern: str) -> list[Path]:
         target = self._path(root)
-        if not target.is_dir():
-            raise FileOperationError(f"Not a directory: {target}")
-        if not pattern.strip():
+        FileSafety.validate_directory(target)
+        if not str(pattern).strip():
             raise FileOperationError("Search pattern cannot be empty.")
-        return sorted(target.rglob(pattern), key=lambda p: str(p).lower())
+        try:
+            return sorted(
+                target.rglob(str(pattern)),
+                key=lambda p: str(p).lower(),
+            )
+        except OSError as error:
+            raise FileOperationError(str(error)) from error
 
     def health(self) -> dict:
-        return {"initialized": self._initialized, "healthy": self._initialized}
+        return {
+            "initialized": self._initialized,
+            "healthy": self._initialized,
+        }
 
     def __repr__(self) -> str:
         return f"FileManager(initialized={self._initialized})"
