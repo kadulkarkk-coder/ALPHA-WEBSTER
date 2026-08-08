@@ -5,19 +5,24 @@ from __future__ import annotations
 from core.voice.config import VoiceConfig
 from core.voice.listener import VoiceListener
 from core.voice.speaker import VoiceSpeaker
+from core.voice.stt import SpeechToTextBackend
 
 
 class VoiceEngine:
-    """Coordinates voice input and output without owning an STT/TTS backend."""
+    """Coordinates configurable speech input and text-to-speech output."""
 
     def __init__(
         self,
         listener: VoiceListener | None = None,
         speaker: VoiceSpeaker | None = None,
         config: VoiceConfig | None = None,
+        stt_backend: SpeechToTextBackend | None = None,
     ) -> None:
         self.config = config or VoiceConfig()
-        self.listener = listener or VoiceListener(self.config)
+        self.listener = listener or VoiceListener(
+            config=self.config,
+            backend=stt_backend,
+        )
         self.speaker = speaker or VoiceSpeaker(self.config)
         self._initialized = False
 
@@ -61,6 +66,10 @@ class VoiceEngine:
             "enabled": self.config.enabled,
             "listening": self.listener.listening,
             "speaking": self.speaker.speaking,
-            "input_backend": self.listener.__class__.__name__,
+            "input_backend": self.listener.backend_name,
+            "input_available": self.listener.available,
+            "input_error": self.listener.error,
             "output_backend": self.speaker.__class__.__name__,
+            "output_available": self.speaker.available,
+            "output_error": self.speaker.error,
         }
