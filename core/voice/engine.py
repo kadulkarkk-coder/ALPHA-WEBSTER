@@ -9,7 +9,7 @@ from core.voice.stt import SpeechToTextBackend
 
 
 class VoiceEngine:
-    """Coordinates configurable speech input and text-to-speech output."""
+    """Coordinates speech input, voice activity, and text-to-speech output."""
 
     def __init__(
         self,
@@ -41,16 +41,31 @@ class VoiceEngine:
     def stop(self) -> None:
         self.listener.stop()
         self.speaker.stop()
+        self._set_input_suppressed(False)
 
     def listen(self) -> str | None:
         if not self._initialized:
             self.initialize()
+        if self.speaker.speaking:
+            return None
         return self.listener.listen()
 
     def speak(self, text: str) -> bool:
         if not self._initialized:
             self.initialize()
-        return self.speaker.speak(text)
+
+        # Prevent Webster from transcribing its own TTS output.
+        self._set_input_suppressed(True)
+        try:
+            return self.speaker.speak(text)
+        finally:
+            self._set_input_suppressed(False)
+
+    def _set_input_suppressed(self, suppressed: bool) -> None:
+        backend = getattr(self.listener, "_backend", None)
+        setter = getattr(backend, "set_speaking", None)
+        if callable(setter):
+            setter(suppressed)
 
     def shutdown(self) -> None:
         if not self._initialized:
