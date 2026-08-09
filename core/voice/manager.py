@@ -77,11 +77,17 @@ class VoiceManager:
             return None
 
         try:
+            self._last_input = text
+            print(f"\n[VOICE] You: {text}")
+
             response = str(self._processor(text)).strip()
             if not response:
                 self._last_error = "AI returned an empty response."
                 return None
+
             self._last_response = response
+            print(f"[VOICE] Webster: {response}\n")
+
             if not self.speak(response):
                 self._last_error = self.engine.speaker.error or "Voice output failed."
             else:
@@ -89,6 +95,7 @@ class VoiceManager:
             return response
         except Exception as error:
             self._last_error = str(error)
+            print(f"[VOICE] Error: {error}")
             return None
 
     def start_voice_loop(self) -> bool:
@@ -118,6 +125,7 @@ class VoiceManager:
 
     def _voice_loop(self) -> None:
         """Wait for speech, process it, speak the answer, then wait again."""
+        print("[VOICE] Hands-free voice mode active. Say 'Webster' to wake me.")
         while not self._stop_event.is_set():
             try:
                 self.converse_once()
