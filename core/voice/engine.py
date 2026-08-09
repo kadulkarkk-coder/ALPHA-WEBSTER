@@ -100,6 +100,8 @@ class VoiceEngine:
             "barge_in_detected": self._barge_in_detected.is_set(),
             "wake_word_enabled": self.config.wake_word_enabled,
             "wake_word": self.config.wake_word,
+            "wake_word_detected": self.listener.wake_word_detected,
+            "last_heard": self.listener.last_heard,
             "vad_enabled": self.config.vad_enabled,
             "input_backend": self.listener.backend_name,
             "input_available": self.listener.available,
