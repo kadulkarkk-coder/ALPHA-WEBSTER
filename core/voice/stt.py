@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import io
 import time
-import wave
 from abc import ABC, abstractmethod
 from collections import deque
 from threading import Event, Lock
@@ -13,8 +11,6 @@ import numpy as np
 
 
 class SpeechToTextBackend(ABC):
-    """Contract for microphone/STT backends."""
-
     name = "unknown"
 
     @abstractmethod
@@ -60,12 +56,7 @@ class NullSpeechBackend(SpeechToTextBackend):
 
 
 class FasterWhisperSpeechBackend(SpeechToTextBackend):
-    """Local microphone + VAD + faster-whisper backend.
-
-    Audio is captured with sounddevice, speech is detected from RMS energy,
-    recording ends after sustained silence, and transcription happens locally.
-    No PyAudio, API key, or cloud request is used.
-    """
+    """Local microphone + VAD + faster-whisper backend."""
 
     name = "faster_whisper"
 
@@ -98,7 +89,6 @@ class FasterWhisperSpeechBackend(SpeechToTextBackend):
             return
         try:
             import sounddevice as sd
-
             sd.check_input_settings(
                 samplerate=self.sample_rate,
                 channels=self.channels,
@@ -106,7 +96,6 @@ class FasterWhisperSpeechBackend(SpeechToTextBackend):
             )
 
             from faster_whisper import WhisperModel
-
             self._model = WhisperModel(
                 self.model_name,
                 device=self.device,
@@ -144,11 +133,12 @@ class FasterWhisperSpeechBackend(SpeechToTextBackend):
         captured: list[np.ndarray] = []
         speech_started = False
         silence_blocks = 0
-        start = time.monotonic()
-        last_speech = start
+        started_at = time.monotonic()
+        last_speech = started_at
         wait_limit = max(0.1, float(timeout))
         phrase_limit = max(0.5, min(float(phrase_timeout), self.max_phrase_seconds))
-        silence_block_count = max(1, int(self.pause_threshold * 1000 / max(10, int(self.block_size * 1000 / self.sample_rate))))
+        block_ms = max(10, int(self.block_size * 1000 / self.sample_rate))
+        silence_block_count = max(1, int(self.pause_threshold * 1000 / block_ms))
 
         def callback(indata, frames, callback_time, status) -> None:
             if status:
@@ -166,12 +156,11 @@ class FasterWhisperSpeechBackend(SpeechToTextBackend):
                 callback=callback,
             ):
                 self._listening = True
-
                 while not self._stop_event.is_set():
                     now = time.monotonic()
-                    if not speech_started and now - start >= wait_limit:
+                    if not speech_started and now - started_at >= wait_limit:
                         break
-                    if speech_started and now - last_speech >= phrase_limit:
+                    if speech_started and now - last_speech >= self.max_phrase_seconds:
                         break
 
                     with self._lock:
@@ -181,9 +170,7 @@ class FasterWhisperSpeechBackend(SpeechToTextBackend):
                         continue
 
                     rms = float(np.sqrt(np.mean(np.square(block)) + 1e-12))
-                    is_speech = rms >= self.energy_threshold
-
-                    if is_speech:
+                    if rms >= self.energy_threshold:
                         speech_started = True
                         last_speech = now
                         silence_blocks = 0
@@ -202,22 +189,19 @@ class FasterWhisperSpeechBackend(SpeechToTextBackend):
                 return None
 
             audio = np.concatenate(captured).astype(np.float32)
-            wav = self._to_wav(audio)
-            return self._transcribe(wav)
-
+            return self._transcribe(audio)
         except Exception as error:
             self._error = str(error)
             return None
         finally:
             self._listening = False
 
-    def _transcribe(self, wav_data: bytes) -> str | None:
+    def _transcribe(self, audio: np.ndarray) -> str | None:
         if self._model is None:
             return None
-
         try:
             segments, _info = self._model.transcribe(
-                io.BytesIO(wav_data),
+                audio,
                 language=self.language,
                 beam_size=1,
                 vad_filter=True,
@@ -228,17 +212,6 @@ class FasterWhisperSpeechBackend(SpeechToTextBackend):
         except Exception as error:
             self._error = str(error)
             return None
-
-    def _to_wav(self, samples: np.ndarray) -> bytes:
-        clipped = np.clip(samples, -1.0, 1.0)
-        pcm = (clipped * 32767.0).astype(np.int16).tobytes()
-        buffer = io.BytesIO()
-        with wave.open(buffer, "wb") as wav:
-            wav.setnchannels(1)
-            wav.setsampwidth(2)
-            wav.setframerate(self.sample_rate)
-            wav.writeframes(pcm)
-        return buffer.getvalue()
 
     def set_speaking(self, speaking: bool, allow_barge_in: bool = False) -> None:
         self._speaking = speaking
@@ -270,5 +243,4 @@ class FasterWhisperSpeechBackend(SpeechToTextBackend):
         return self._error
 
 
-# Backward-compatible name for code that expects a microphone backend.
 MicrophoneSpeechBackend = FasterWhisperSpeechBackend
