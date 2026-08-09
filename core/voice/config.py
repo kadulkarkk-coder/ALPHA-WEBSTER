@@ -16,8 +16,6 @@ class VoiceConfig:
     rate: int = 175
     volume: float = 1.0
 
-    # PyAudio is preferred. The STT layer can fall back to sounddevice when
-    # PyAudio is unavailable on a machine.
     input_backend: str = "pyaudio_whisper"
     output_backend: str = "pyttsx3"
     whisper_model: str = "tiny.en"
@@ -48,6 +46,9 @@ class VoiceConfig:
 
     barge_in_enabled: bool = True
     barge_in_threshold_multiplier: float = 3.0
+    barge_in_start_blocks: int = 4
+    echo_calibration_seconds: float = 0.35
+    echo_multiplier: float = 1.8
 
     def __post_init__(self) -> None:
         self.rate = max(50, min(int(self.rate), 400))
@@ -68,6 +69,9 @@ class VoiceConfig:
         self.wake_word_similarity = max(0.5, min(float(self.wake_word_similarity), 1.0))
         self.wake_followup_timeout = max(1.0, float(self.wake_followup_timeout))
         self.barge_in_threshold_multiplier = max(1.1, float(self.barge_in_threshold_multiplier))
+        self.barge_in_start_blocks = max(2, int(self.barge_in_start_blocks))
+        self.echo_calibration_seconds = max(0.15, float(self.echo_calibration_seconds))
+        self.echo_multiplier = max(1.1, float(self.echo_multiplier))
         self.input_backend = self.input_backend.strip().lower() or "pyaudio_whisper"
         self.output_backend = self.output_backend.strip().lower() or "pyttsx3"
         self.whisper_model = self.whisper_model.strip() or "tiny.en"
