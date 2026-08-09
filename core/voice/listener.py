@@ -6,14 +6,12 @@ from core.voice.config import VoiceConfig
 from core.voice.stt import FasterWhisperSpeechBackend, NullSpeechBackend
 
 class VoiceListener:
-    """Owns faster-whisper microphone input, wake-word filtering and microphone policy."""
+    """Owns faster-whisper input, wake-word filtering and microphone policy."""
     _WAKE_PREFIX_RE = re.compile(r"^[,.:;!?\-\s]+")
     def __init__(self, config: VoiceConfig | None = None, backend=None) -> None:
         self.config=config or VoiceConfig(); self._backend=backend or self._build_backend(); self._initialized=False; self._listening=False; self._error=None; self._wake_word_detected=False; self._last_heard=None; self._last_wake_score=0.0; self._wake_candidates=0
     def _build_backend(self):
-        # faster-whisper + sounddevice is the supported Python 3.14 microphone path.
-        if self.config.input_backend in {"pyaudio","pyaudio_whisper","microphone"}: return FasterWhisperSpeechBackend(self.config)
-        if self.config.input_backend in {"sounddevice_whisper","faster_whisper","faster-whisper"}: return FasterWhisperSpeechBackend(self.config)
+        if self.config.input_backend in {"pyaudio","pyaudio_whisper","microphone","sounddevice_whisper","faster_whisper","faster-whisper"}: return FasterWhisperSpeechBackend(self.config)
         return NullSpeechBackend()
     def initialize(self):
         if self._initialized: return
@@ -24,6 +22,10 @@ class VoiceListener:
         self._initialized=True
     def start(self):
         if not self._initialized: self.initialize()
+        try:
+            starter=getattr(self._backend,"start",None)
+            if callable(starter): starter()
+        except Exception as exc: self._error=str(exc)
         self._listening=False
     def stop(self):
         try: self._backend.stop()
