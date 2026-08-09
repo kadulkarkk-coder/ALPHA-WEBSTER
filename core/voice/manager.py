@@ -2,15 +2,16 @@
 from __future__ import annotations
 from collections.abc import Callable
 from threading import Event, Thread, current_thread
+import time
 from core.voice.config import VoiceConfig
 from core.voice.engine import VoiceEngine
 
 class VoiceManager:
     """Persistent hands-free voice controller.
 
-    Voice mode is continuous after startup: Webster greets once, then listens
-    continuously. The wake word is only required for the initial activation.
-    Say ``mute`` to stop listening. Audio-only barge-in remains disabled.
+    After startup, voice mode stays active continuously. The microphone is
+    reopened for every utterance, and a failed/empty capture never terminates
+    the voice loop. Audio-only barge-in remains disabled.
     """
     def __init__(self, engine: VoiceEngine | None = None, config: VoiceConfig | None = None) -> None:
         self.config=config or VoiceConfig(); self.engine=engine or VoiceEngine(config=self.config); self._initialized=False; self._running=False; self._processor: Callable[[str], str] | None=None; self._last_input=None; self._last_response=None; self._last_error=None; self._loop_thread=None; self._stop_event=Event(); self._voice_ready=Event(); self._muted=False
@@ -32,7 +33,7 @@ class VoiceManager:
         self.stop_voice_loop()
         if self._initialized: self.engine.shutdown(); self._initialized=False
 
-    def listen(self, ignore_wake_word=False):
+    def listen(self, ignore_wake_word=True):
         if not self._initialized: self.initialize()
         text=self.engine.listen(ignore_wake_word=ignore_wake_word)
         if text: self._last_input=text
@@ -68,13 +69,21 @@ class VoiceManager:
 
     def _voice_loop(self):
         print("[VOICE] Listening... Say 'mute' to stop voice mode.", flush=True)
-        first_turn=True
+        # Continuous mode: wake word is deliberately bypassed after startup.
+        # The first and every subsequent turn use the same listening path.
         while not self._stop_event.is_set():
             try:
-                # Wake word is required only for the initial activation.
-                text=self.engine.listen(ignore_wake_word=not first_turn)
+                # Re-arm the listener before every turn. This is intentionally
+                # lightweight and prevents the first InputStream lifecycle from
+                # becoming the only active capture session on Windows.
+                self.engine.listener.start()
                 if self._stop_event.is_set(): break
-                if not text: continue
+                text=self.engine.listen(ignore_wake_word=True)
+                if self._stop_event.is_set(): break
+                if not text:
+                    # Silence is normal. Keep the loop alive and re-arm capture.
+                    time.sleep(0.05)
+                    continue
                 normalized=text.strip().lower()
                 if normalized in {"mute", "mute webster", "webster mute", "stop listening", "stop voice"}:
                     self._muted=True; print("[VOICE] Muted. Say 'voice' to resume.", flush=True); break
@@ -84,18 +93,22 @@ class VoiceManager:
                     self._last_error=str(error); print(f"[VOICE] Error: {error}", flush=True)
                 finally:
                     self.engine.end_conversation(); self._voice_ready.clear()
-                # Continuous mode: after every response, immediately listen again.
-                # No wake-word prompt and no keyboard Enter are required.
-                first_turn=False
+                # Explicitly re-arm after TTS. No Enter key and no wake word.
+                if not self._stop_event.is_set():
+                    time.sleep(0.20)
+                    print("[VOICE] Listening...", flush=True)
             except Exception as error:
                 self._last_error=str(error); print(f"[VOICE] Voice loop recovered: {error}", flush=True)
-                if self._stop_event.wait(0.15): break
+                # Recover the capture backend without killing the voice thread.
+                try: self.engine.listener.stop(); self.engine.listener.start()
+                except Exception: pass
+                if self._stop_event.wait(0.25): break
         self._voice_ready.clear()
 
     def converse_once(self):
         if not self._initialized: self.initialize()
         if self._processor is None: self._last_error="No voice conversation processor is configured."; return None
-        text=self.engine.listen(ignore_wake_word=False)
+        text=self.engine.listen(ignore_wake_word=True)
         if not text: return None
         try: return self._process(text)
         except Exception as error: self._last_error=str(error); print(f"[VOICE] Error: {error}", flush=True); return None
