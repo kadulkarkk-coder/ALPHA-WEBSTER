@@ -63,7 +63,6 @@ class FasterWhisperSpeechBackend(SpeechToTextBackend):
         self.compute_type = str(getattr(config, "whisper_compute_type", "int8"))
         self.language = str(getattr(config, "language", "en")).split("-")[0]
         self.input_device = getattr(config, "input_device", None)
-
         self._model = None
         self._available = False
         self._listening = False
@@ -88,13 +87,11 @@ class FasterWhisperSpeechBackend(SpeechToTextBackend):
                 raise RuntimeError("Selected microphone has no input channels.")
             self._device_name = str(info.get("name", device))
             samplerate = int(round(float(info.get("default_samplerate", self.sample_rate))))
-            # Keep 16 kHz when supported; otherwise use the device default.
             try:
                 sd.check_input_settings(device=device, samplerate=self.sample_rate, channels=1, dtype="float32")
             except Exception:
                 self.sample_rate = samplerate
                 self.block_size = max(160, int(self.sample_rate * 0.03))
-
             from faster_whisper import WhisperModel
             self._model = WhisperModel(self.model_name, device=self.device, compute_type=self.compute_type)
             self._available = True
@@ -111,22 +108,18 @@ class FasterWhisperSpeechBackend(SpeechToTextBackend):
             return None
         if self._speaking and not self._allow_barge_in:
             return None
-
         try:
             import sounddevice as sd
         except Exception as error:
             self._error = f"sounddevice unavailable: {error}"
             return None
-
         self._stop_event.clear()
         with self._lock:
             self._queue.clear()
-
         captured: list[np.ndarray] = []
         pre_roll: deque[np.ndarray] = deque(maxlen=max(1, int(self.pre_roll_seconds * 1000 / max(10, int(self.block_size * 1000 / self.sample_rate)))))
         speech_started = False
         voiced_blocks = 0
-        silent_blocks = 0
         start_time = time.monotonic()
         last_voice = start_time
         block_seconds = self.block_size / self.sample_rate
@@ -142,19 +135,11 @@ class FasterWhisperSpeechBackend(SpeechToTextBackend):
             samples = np.asarray(indata, dtype=np.float32)
             if samples.ndim > 1:
                 samples = samples[:, 0]
-            samples = samples.copy()
             with self._lock:
-                self._queue.append(samples)
+                self._queue.append(samples.copy())
 
         try:
-            with sd.InputStream(
-                device=self.input_device,
-                samplerate=self.sample_rate,
-                channels=1,
-                dtype="float32",
-                blocksize=self.block_size,
-                callback=callback,
-            ):
+            with sd.InputStream(device=self.input_device, samplerate=self.sample_rate, channels=1, dtype="float32", blocksize=self.block_size, callback=callback):
                 self._listening = True
                 while not self._stop_event.is_set():
                     now = time.monotonic()
@@ -165,7 +150,6 @@ class FasterWhisperSpeechBackend(SpeechToTextBackend):
                             break
                         time.sleep(0.005)
                         continue
-
                     rms = float(np.sqrt(np.mean(np.square(block)) + 1e-12))
                     self._last_rms = rms
                     if not speech_started and not calibrated:
@@ -174,17 +158,10 @@ class FasterWhisperSpeechBackend(SpeechToTextBackend):
                             ambient = float(np.median(calibration))
                             self._last_threshold = max(self.energy_threshold, ambient * self.vad_multiplier)
                             calibrated = True
-
                     threshold = self._last_threshold if calibrated else self.energy_threshold
                     pre_roll.append(block)
                     voiced = rms >= threshold
-
-                    if voiced:
-                        voiced_blocks += 1
-                        silent_blocks = 0
-                    else:
-                        voiced_blocks = 0
-
+                    voiced_blocks = voiced_blocks + 1 if voiced else 0
                     if not speech_started:
                         if voiced_blocks >= self.start_blocks:
                             speech_started = True
@@ -200,12 +177,9 @@ class FasterWhisperSpeechBackend(SpeechToTextBackend):
                             break
                         elif now - start_time >= phrase_limit:
                             break
-
             if not speech_started or not captured or self._stop_event.is_set():
                 return None
-
             audio = np.concatenate(captured).astype(np.float32)
-            # Remove DC offset and normalize only if the recording is unusually quiet.
             audio = audio - float(np.mean(audio))
             peak = float(np.max(np.abs(audio))) if audio.size else 0.0
             if 0.0 < peak < 0.15:
@@ -219,19 +193,7 @@ class FasterWhisperSpeechBackend(SpeechToTextBackend):
 
     def _transcribe(self, audio: np.ndarray) -> str | None:
         try:
-            segments, _info = self._model.transcribe(
-                audio,
-                language=self.language,
-                task="transcribe",
-                beam_size=1,
-                best_of=1,
-                temperature=0.0,
-                vad_filter=True,
-                vad_parameters={"min_silence_duration_ms": 350},
-                condition_on_previous_text=False,
-                without_timestamps=True,
-            )
-            # faster-whisper returns a lazy generator; force iteration here.
+            segments, _info = self._model.transcribe(audio, language=self.language, task="transcribe", beam_size=1, best_of=1, temperature=0.0, vad_filter=True, vad_parameters={"min_silence_duration_ms": 350}, condition_on_previous_text=False, without_timestamps=True)
             text = " ".join(segment.text.strip() for segment in segments).strip()
             return text or None
         except Exception as error:
@@ -254,18 +216,15 @@ class FasterWhisperSpeechBackend(SpeechToTextBackend):
     def devices(self) -> list[dict]:
         try:
             import sounddevice as sd
-            devices = []
-            for index, info in enumerate(sd.query_devices()):
-                if int(info.get("max_input_channels", 0)) > 0:
-                    devices.append({"index": index, "name": info.get("name"), "inputs": info.get("max_input_channels"), "samplerate": info.get("default_samplerate")})
-            return devices
+            return [{"index": index, "name": info.get("name"), "inputs": info.get("max_input_channels"), "samplerate": info.get("default_samplerate")} for index, info in enumerate(sd.query_devices()) if int(info.get("max_input_channels", 0)) > 0]
         except Exception as error:
             self._error = f"Could not enumerate microphones: {error}"
             return []
 
     @property
     def available(self) -> bool:
-        return self._available and (not self._speaking or self._allow_barge_in)
+        # Hardware/STT availability is independent from whether TTS is currently speaking.
+        return self._available
 
     @property
     def listening(self) -> bool:
