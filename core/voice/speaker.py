@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 from core.voice.config import VoiceConfig
+from core.voice.speaker_elevenlabs import ElevenLabsSpeaker
 from core.voice.speaker_pyttsx3 import Pyttsx3Speaker
 
 
 class VoiceSpeaker:
-    """Stable TTS facade backed by the optional pyttsx3 implementation."""
+    """Stable TTS facade with configurable cloud/local backend."""
 
     def __init__(self, config: VoiceConfig | None = None) -> None:
         self.config = config or VoiceConfig()
-        self._backend = Pyttsx3Speaker(self.config)
+        if self.config.output_backend == "elevenlabs":
+            self._backend = ElevenLabsSpeaker(self.config)
+        else:
+            self._backend = Pyttsx3Speaker(self.config)
         self._initialized = False
 
     def initialize(self) -> None:
@@ -23,10 +27,8 @@ class VoiceSpeaker:
     def speak(self, text: str) -> bool:
         if not self._initialized:
             self.initialize()
-
         if not self.config.enabled or not self.config.speak_enabled:
             return False
-
         return self._backend.speak(str(text))
 
     def stop(self) -> None:
@@ -40,13 +42,13 @@ class VoiceSpeaker:
 
     def set_rate(self, rate: int) -> None:
         self.config.rate = max(50, min(int(rate), 400))
-        if self._initialized and self._backend.available:
-            self._backend.initialize()
+        if self._initialized and hasattr(self._backend, "set_rate"):
+            self._backend.set_rate(self.config.rate)
 
     def set_volume(self, volume: float) -> None:
         self.config.volume = max(0.0, min(float(volume), 1.0))
-        if self._initialized and self._backend.available:
-            self._backend.initialize()
+        if self._initialized and hasattr(self._backend, "set_volume"):
+            self._backend.set_volume(self.config.volume)
 
     @property
     def initialized(self) -> bool:
