@@ -2,21 +2,21 @@
 
 from __future__ import annotations
 
+from threading import Lock
+
 from core.voice.config import VoiceConfig
 
 
 class Pyttsx3Speaker:
-    """Offline Windows-friendly TTS backend.
-
-    This backend is optional. Importing this module does not require
-    pyttsx3; the dependency is loaded only during initialization.
-    """
+    """Offline Windows-friendly TTS backend with cooperative interruption."""
 
     def __init__(self, config: VoiceConfig | None = None) -> None:
         self.config = config or VoiceConfig()
         self._engine = None
         self._error: str | None = None
         self._speaking = False
+        self._stop_requested = False
+        self._lock = Lock()
 
     def initialize(self) -> None:
         if self._engine is not None:
@@ -37,23 +37,31 @@ class Pyttsx3Speaker:
         if self._engine is None or not text.strip():
             return False
         try:
-            self._speaking = True
-            self._engine.say(text.strip())
-            self._engine.runAndWait()
-            return True
+            with self._lock:
+                self._stop_requested = False
+                self._speaking = True
+                self._engine.say(text.strip())
+                self._engine.runAndWait()
+                return not self._stop_requested
         except Exception as error:
             self._error = str(error)
             return False
         finally:
-            self._speaking = False
+            with self._lock:
+                self._speaking = False
+                self._stop_requested = False
 
     def stop(self) -> None:
-        if self._engine is not None:
+        with self._lock:
+            self._stop_requested = True
+            engine = self._engine
+        if engine is not None:
             try:
-                self._engine.stop()
+                engine.stop()
             except Exception:
                 pass
-        self._speaking = False
+        with self._lock:
+            self._speaking = False
 
     def shutdown(self) -> None:
         self.stop()
