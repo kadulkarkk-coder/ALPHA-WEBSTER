@@ -1,11 +1,8 @@
-"""core.planning.analyzer
+"""Rule-based goal analysis for Webster planning."""
 
-Rule-based GoalAnalyzer and GoalAnalysis result model.
-"""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, List
 
 from .goal import Goal
 
@@ -21,179 +18,65 @@ class GoalAnalysis:
 
 
 class GoalAnalyzer:
-    """
-    Rule-based analyzer that inspects a Goal and returns a GoalAnalysis.
-    """
+    """Deterministically maps natural-language goals to real capabilities."""
+
+    _RULES = (
+        (("create folder", "make folder", "mkdir"), "filesystem", ("create_folder",)),
+        (("create file", "new file", "make file"), "filesystem", ("create_file",)),
+        (("write file", "save file"), "filesystem", ("write_file",)),
+        (("read file", "open file", "view file"), "filesystem", ("read_file",)),
+        (("rename file",), "filesystem", ("rename_file",)),
+        (("move file", "relocate file"), "filesystem", ("move_file",)),
+        (("copy file",), "filesystem", ("copy_file",)),
+        (("delete file", "remove file", "delete folder", "remove folder"), "filesystem", ("delete_file",)),
+        (("list directory", "list files", "show files", "list folder", "show folder"), "filesystem", ("list_directory",)),
+        (("search files", "find files", "find all", "search folder"), "filesystem", ("search_files",)),
+        (("open url", "go to", "visit", "open website", "open chatgpt"), "internet", ("open_url",)),
+        (("refresh", "reload"), "internet", ("refresh",)),
+        (("back",), "internet", ("back",)),
+        (("shutdown", "restart", "sleep", "hibernate", "lock", "logout"), "system", ("power",)),
+    )
 
     def analyze(self, goal: Goal) -> GoalAnalysis:
         goal.validate()
+        text = goal.objective.lower().strip()
 
-        text = goal.objective.lower()
-
-        rules = [
-            (
-                ["create project", "setup project", "initialize project"],
-                "development",
-                ("create_folder", "write_file", "open_folder", "open_url"),
-                "medium",
-                4,
-                "staged",
-            ),
-            (
-                ["create folder", "make folder", "mkdir"],
-                "filesystem",
-                ("create_folder",),
-                "low",
-                1,
-                "sequential",
-            ),
-            (
-                ["create file", "new file", "write file", "save file"],
-                "filesystem",
-                ("create_folder", "write_file"),
-                "low",
-                1,
-                "sequential",
-            ),
-            (
-                ["read file", "open file", "view file"],
-                "filesystem",
-                ("read_file",),
-                "low",
-                1,
-                "sequential",
-            ),
-            (
-                ["rename file", "move file", "relocate file"],
-                "filesystem",
-                ("rename", "move"),
-                "low",
-                1,
-                "sequential",
-            ),
-            (
-                ["delete file", "remove file", "delete folder", "remove folder"],
-                "filesystem",
-                ("delete",),
-                "low",
-                1,
-                "sequential",
-            ),
-            (
-                ["list directory", "list files", "show files", "list folder"],
-                "filesystem",
-                ("list_directory",),
-                "low",
-                1,
-                "sequential",
-            ),
-            (
-                ["search files", "find files", "search folder"],
-                "filesystem",
-                ("search",),
-                "low",
-                1,
-                "sequential",
-            ),
-            (
-                ["open url", "go to", "visit", "open website", "open chatgpt"],
-                "internet",
-                ("open_url",),
-                "low",
-                1,
-                "sequential",
-            ),
-            (
-                ["search for", "google", "search web", "web search"],
-                "internet",
-                ("web_search",),
-                "low",
-                1,
-                "sequential",
-            ),
-            (
-                ["refresh", "reload"],
-                "internet",
-                ("refresh",),
-                "low",
-                1,
-                "sequential",
-            ),
-            (
-                ["back", "forward", "close tab"],
-                "internet",
-                ("back", "forward", "close_tab"),
-                "low",
-                1,
-                "sequential",
-            ),
-            (
-                ["shutdown", "restart", "sleep", "hibernate", "lock", "logout"],
-                "system",
-                ("power",),
-                "low",
-                1,
-                "sequential",
-            ),
-            (
-                ["launch application", "open application", "start application", "launch app"],
-                "system",
-                ("launch_application",),
-                "low",
-                1,
-                "sequential",
-            ),
-            (
-                ["kill process", "terminate application", "close process"],
-                "system",
-                ("kill_process",),
-                "low",
-                1,
-                "sequential",
-            ),
-        ]
-
-        for patterns, category, caps, complexity, est, strategy in rules:
+        for patterns, category, capabilities in self._RULES:
             if any(pattern in text for pattern in patterns):
                 return GoalAnalysis(
                     category=category,
-                    required_capabilities=caps,
-                    complexity=complexity,
-                    estimated_tasks=est,
+                    required_capabilities=capabilities,
+                    complexity="low" if len(capabilities) == 1 else "medium",
+                    estimated_tasks=len(capabilities),
                     priority=goal.priority,
-                    execution_strategy=strategy,
+                    execution_strategy="sequential",
                 )
 
-        if "file" in text or "folder" in text or "directory" in text:
-            caps = ("create_folder", "write_file", "read_file", "list_directory")
-            category = "filesystem"
-            complexity = "low"
-            est = 2
-            strategy = "sequential"
-        elif "browser" in text or "web" in text or "search" in text:
-            caps = ("open_url", "web_search")
-            category = "internet"
-            complexity = "low"
-            est = 2
-            strategy = "sequential"
-        elif any(word in text for word in ("shutdown", "restart", "sleep", "lock", "logout")):
-            caps = ("power",)
-            category = "system"
-            complexity = "low"
-            est = 1
-            strategy = "sequential"
-        else:
-            caps = ("open_url",)
-            category = "general"
-            complexity = "low"
-            est = 1
-            strategy = "sequential"
+        if any(word in text for word in ("file", "files", "folder", "directory", "document")):
+            return GoalAnalysis(
+                category="filesystem",
+                required_capabilities=("list_directory",),
+                complexity="low",
+                estimated_tasks=1,
+                priority=goal.priority,
+                execution_strategy="sequential",
+            )
+
+        if any(word in text for word in ("browser", "website", "web", "url")):
+            return GoalAnalysis(
+                category="internet",
+                required_capabilities=("open_url",),
+                complexity="low",
+                estimated_tasks=1,
+                priority=goal.priority,
+                execution_strategy="sequential",
+            )
 
         return GoalAnalysis(
-            category=category,
-            required_capabilities=caps,
-            complexity=complexity,
-            estimated_tasks=est,
+            category="general",
+            required_capabilities=(),
+            complexity="low",
+            estimated_tasks=0,
             priority=goal.priority,
-            execution_strategy=strategy,
+            execution_strategy="none",
         )
