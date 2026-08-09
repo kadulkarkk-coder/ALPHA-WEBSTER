@@ -1,13 +1,9 @@
-# Webster Alpha voice/core dependencies
-# Gemini is the primary AI provider; Ollama remains an optional local fallback.
-
+# Webster Alpha core + voice dependencies
+# Voice input: sounddevice captures the microphone; faster-whisper performs local STT.
+# PyAudio is intentionally NOT required for the Python 3.14 voice stack.
 google-genai>=1.0.0,<2
 requests>=2.32.0,<3
 python-dotenv>=1.0.1,<2
-
-# Voice input: PyAudio is the preferred microphone transport.
-# sounddevice remains available as a fallback backend.
-PyAudio>=0.2.14,<0.3
 sounddevice>=0.5.5,<1
 numpy>=2.0,<3
 faster-whisper>=1.2.1,<2
