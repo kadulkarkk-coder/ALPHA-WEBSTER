@@ -1,157 +1,161 @@
-"""core.planning.decomposer
+"""Deterministic task decomposition for Webster goals."""
 
-Deterministic TaskDecomposer to convert a Goal + GoalAnalysis into Tasks.
-"""
 from __future__ import annotations
 
+import re
 from typing import List
 
-from .goal import Goal
+from core.capability.registry import CapabilityRegistry
+
 from .analyzer import GoalAnalysis
+from .goal import Goal
 from .task import Task
 
 
 class TaskDecomposer:
-    """
-    Deterministic decomposer. Extensible rule set.
-    """
+    """Converts analyzed goals into executable tasks using real capabilities."""
+
+    def __init__(self, registry: CapabilityRegistry | None = None) -> None:
+        self._registry = registry
+
+    @property
+    def registry(self) -> CapabilityRegistry | None:
+        return self._registry
+
+    def _available(self, capability: str) -> bool:
+        return self._registry is None or self._registry.exists(capability)
 
     def decompose(self, goal: Goal, analysis: GoalAnalysis | None = None) -> List[Task]:
         goal.validate()
-
         text = goal.objective.strip()
 
         if analysis is None:
             from .analyzer import GoalAnalyzer
-
             analysis = GoalAnalyzer().analyze(goal)
 
         tasks: List[Task] = []
-
         for capability in analysis.required_capabilities:
+            if not self._available(capability):
+                continue
             arguments = self._infer_arguments(text, capability)
-            description = self._describe_task(text, capability)
-            tasks.append(Task(description=description, capability=capability, arguments=arguments))
-
-        if not tasks:
-            tasks.append(Task(description=goal.objective, capability="open_url", arguments={"url": text}))
+            metadata = {}
+            if capability == "delete_file":
+                metadata["requires_confirmation"] = True
+            tasks.append(
+                Task(
+                    description=self._describe_task(text, capability),
+                    capability=capability,
+                    arguments=arguments,
+                    metadata=metadata,
+                )
+            )
 
         return tasks
 
-    # ---------------------------------------------------------
-
     def _describe_task(self, objective: str, capability: str) -> str:
-        if capability == "create_folder":
-            return f"Create a folder for: {objective}"
-        if capability == "write_file":
-            return f"Create or write a file for: {objective}"
-        if capability == "read_file":
-            return f"Read a file for: {objective}"
-        if capability == "list_directory":
-            return f"List directory contents for: {objective}"
-        if capability == "search":
-            return f"Search files for: {objective}"
-        if capability == "open_url":
-            return f"Open a URL or website for: {objective}"
-        if capability == "web_search":
-            return f"Search the web for: {objective}"
-        if capability == "refresh":
-            return f"Refresh the browser for: {objective}"
-        if capability == "back":
-            return f"Navigate browser back for: {objective}"
-        if capability == "forward":
-            return f"Navigate browser forward for: {objective}"
-        if capability == "close_tab":
-            return f"Close a browser tab for: {objective}"
-        if capability == "power":
-            return f"Perform system power action for: {objective}"
-        if capability == "launch_application":
-            return f"Launch an application for: {objective}"
-        if capability == "kill_process":
-            return f"Terminate a process for: {objective}"
-        return f"Execute capability '{capability}' for: {objective}"
+        descriptions = {
+            "create_folder": "Create a folder",
+            "create_file": "Create a file",
+            "write_file": "Write file contents",
+            "read_file": "Read a file",
+            "rename_file": "Rename a file",
+            "move_file": "Move a file",
+            "copy_file": "Copy a file",
+            "delete_file": "Delete a file",
+            "list_directory": "List directory contents",
+            "search_files": "Search filesystem entries",
+            "open_url": "Open a URL",
+            "refresh": "Refresh the browser",
+            "back": "Navigate browser back",
+            "power": "Perform a system power action",
+        }
+        return f"{descriptions.get(capability, capability)} for: {objective}"
 
     def _infer_arguments(self, objective: str, capability: str) -> dict[str, object]:
-        objective_lower = objective.lower()
+        text = objective.strip()
+        lower = text.lower()
 
-        if capability == "create_folder":
-            path = self._extract_target_name(objective, ["called", "named", "folder", "directory"])
-            if path:
-                return {"path": path}
+        if capability in {"create_folder", "create_file"}:
+            target = self._quoted_or_tail(text, ("called", "named", "folder", "file"))
+            return {"path": target or "NewFolder" if capability == "create_folder" else "new_file.txt"}
 
         if capability == "write_file":
-            filename = self._extract_target_name(objective, ["called", "named", "file"])
-            if filename:
-                return {"path": filename, "content": ""}
+            path = self._quoted_or_tail(text, ("file", "called", "named")) or "output.txt"
+            content = self._extract_after(text, ("with content", "containing", "saying")) or ""
+            return {"path": path, "content": content}
 
         if capability == "read_file":
-            path = self._extract_target_name(objective, ["called", "named", "file"])
-            if path:
-                return {"path": path}
+            return {"path": self._quoted_or_tail(text, ("file", "called", "named")) or text}
+
+        if capability == "rename_file":
+            source, destination = self._extract_from_to(text)
+            return {"source": source or text, "new_name": destination or "renamed_file"}
+
+        if capability in {"move_file", "copy_file"}:
+            source, destination = self._extract_from_to(text)
+            return {"source": source or text, "destination": destination or "."}
+
+        if capability == "delete_file":
+            target = self._quoted_or_tail(text, ("file", "folder", "called", "named")) or text
+            return {"path": target, "require_confirmation": True, "confirmed": False}
 
         if capability == "list_directory":
-            path = self._extract_target_name(objective, ["in", "folder", "directory"])
-            if path:
-                return {"path": path}
+            path = self._quoted_or_tail(text, ("in", "inside", "folder", "directory")) or "."
+            return {"path": path}
 
-        if capability == "search":
-            query = self._extract_target_name(objective, ["for", "named", "called"])
-            if query:
-                return {"query": query, "path": "."}
+        if capability == "search_files":
+            pattern = self._search_pattern(text)
+            return {"path": ".", "pattern": pattern, "recursive": True, "files_only": True}
 
         if capability == "open_url":
-            if "chatgpt" in objective_lower:
-                return {"url": "https://chat.openai.com"}
-            if "http" in objective_lower or "www." in objective_lower:
-                for token in objective.split():
-                    if token.startswith("http") or token.startswith("www."):
-                        return {"url": token}
-            query = self._extract_target_name(objective, ["for", "to", "open"])
-            if query:
-                return {"url": query}
-
-        if capability == "web_search":
-            query = self._extract_target_name(objective, ["for", "about", "search"])
-            return {"query": query or objective}
+            for token in text.split():
+                clean = token.strip(".,()[]")
+                if clean.startswith(("http://", "https://", "www.")):
+                    return {"url": clean}
+            return {"url": "https://" + text.replace(" ", "")}
 
         if capability == "power":
-            if "shutdown" in objective_lower:
-                return {"action": "shutdown"}
-            if "restart" in objective_lower:
-                return {"action": "restart"}
-            if "sleep" in objective_lower or "hibernate" in objective_lower:
-                return {"action": "sleep"}
-            if "lock" in objective_lower:
-                return {"action": "lock"}
-            if "logout" in objective_lower:
-                return {"action": "logout"}
-
-        if capability == "launch_application":
-            app_name = self._extract_target_name(objective, ["open", "launch", "start", "run"])
-            if app_name:
-                return {"application": app_name}
-
-        if capability == "kill_process":
-            process_name = self._extract_target_name(objective, ["process", "application", "app", "named"])
-            if process_name:
-                return {"process_name": process_name}
+            for action in ("shutdown", "restart", "sleep", "hibernate", "lock", "logout"):
+                if action in lower:
+                    return {"action": action}
 
         return {}
 
-    def _extract_target_name(self, objective: str, markers: list[str]) -> str | None:
-        lower = objective.lower()
+    def _extract_from_to(self, text: str) -> tuple[str | None, str | None]:
+        match = re.search(r"(?:from\s+)?[\"']?(.+?)[\"']?\s+(?:to|into)\s+[\"']?(.+?)[\"']?$", text, re.I)
+        if match:
+            return match.group(1).strip(" .\"'"), match.group(2).strip(" .\"'")
+        return None, None
 
+    def _extract_after(self, text: str, markers: tuple[str, ...]) -> str | None:
+        lower = text.lower()
         for marker in markers:
-            if marker in lower:
-                parts = lower.split(marker, 1)[1].strip()
-                if not parts:
-                    continue
-                if parts.startswith("named "):
-                    parts = parts[len("named "):]
-                if parts.startswith("called "):
-                    parts = parts[len("called "):]
-                parts = parts.strip(" .")
-                tokens = parts.split()
-                if tokens:
-                    return tokens[0]
+            index = lower.find(marker)
+            if index >= 0:
+                value = text[index + len(marker):].strip(" :.-\"")
+                if value:
+                    return value
         return None
+
+    def _quoted_or_tail(self, text: str, markers: tuple[str, ...]) -> str | None:
+        quoted = re.search(r"[\"']([^\"']+)[\"']", text)
+        if quoted:
+            return quoted.group(1).strip()
+        lower = text.lower()
+        for marker in markers:
+            index = lower.find(marker)
+            if index >= 0:
+                value = text[index + len(marker):].strip(" :.-")
+                if value:
+                    return value.split(" with content ", 1)[0].strip()
+        return None
+
+    def _search_pattern(self, text: str) -> str:
+        match = re.search(r"\b(?:python|pdf|text|word|image|video|audio)\b", text, re.I)
+        if match:
+            token = match.group(0).lower()
+            return {"python": "*.py", "pdf": "*.pdf", "text": "*.txt", "word": "*.docx", "image": "*.png", "video": "*.mp4", "audio": "*.mp3"}.get(token, "*")
+        quoted = re.search(r"[\"']([^\"']+)[\"']", text)
+        if quoted:
+            return quoted.group(1)
+        return "*"
