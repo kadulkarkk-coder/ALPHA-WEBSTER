@@ -6,14 +6,13 @@ import re
 from typing import List
 
 from core.capability.registry import CapabilityRegistry
-
 from .analyzer import GoalAnalysis
 from .goal import Goal
 from .task import Task
 
 
 class TaskDecomposer:
-    """Converts analyzed goals into executable tasks using real capabilities."""
+    """Convert an analyzed goal into executable tasks."""
 
     def __init__(self, registry: CapabilityRegistry | None = None) -> None:
         self._registry = registry
@@ -27,8 +26,6 @@ class TaskDecomposer:
 
     def decompose(self, goal: Goal, analysis: GoalAnalysis | None = None) -> List[Task]:
         goal.validate()
-        text = goal.objective.strip()
-
         if analysis is None:
             from .analyzer import GoalAnalyzer
             analysis = GoalAnalyzer().analyze(goal)
@@ -37,49 +34,40 @@ class TaskDecomposer:
         for capability in analysis.required_capabilities:
             if not self._available(capability):
                 continue
-            arguments = self._infer_arguments(text, capability)
-            metadata: dict[str, object] = {}
+            arguments = self._infer_arguments(goal.objective.strip(), capability)
+            metadata: dict[str, object] = {"action": capability}
             if capability == "delete_file":
                 metadata["requires_confirmation"] = True
-            tasks.append(
-                Task(
-                    description=self._describe_task(text, capability),
-                    capability=capability,
-                    arguments=arguments,
-                    metadata=metadata,
-                )
-            )
-
+            tasks.append(Task(
+                description=self._describe_task(goal.objective, capability),
+                capability=capability,
+                arguments=arguments,
+                metadata=metadata,
+            ))
         return tasks
 
     def _describe_task(self, objective: str, capability: str) -> str:
-        descriptions = {
-            "create_folder": "Create a folder",
-            "create_file": "Create a file",
-            "write_file": "Write file contents",
-            "read_file": "Read a file",
-            "rename_file": "Rename a file",
-            "move_file": "Move a file",
-            "copy_file": "Copy a file",
-            "delete_file": "Delete a file",
-            "list_directory": "List directory contents",
-            "search_files": "Search filesystem entries",
-            "open_url": "Open a URL",
-            "refresh": "Refresh the browser",
-            "back": "Navigate browser back",
-            "power": "Perform a system power action",
+        names = {
+            "create_folder": "Create a folder", "create_file": "Create a file",
+            "write_file": "Write file contents", "read_file": "Read a file",
+            "rename_file": "Rename a file", "move_file": "Move a file",
+            "copy_file": "Copy a file", "delete_file": "Delete a file",
+            "list_directory": "List directory contents", "search_files": "Search filesystem entries",
+            "open_url": "Open a URL", "refresh": "Refresh the browser",
+            "back": "Navigate browser back", "power": "Perform a system power action",
         }
-        return f"{descriptions.get(capability, capability)} for: {objective}"
+        return f"{names.get(capability, capability)} for: {objective}"
 
     def _infer_arguments(self, objective: str, capability: str) -> dict[str, object]:
         text = objective.strip()
         lower = text.lower()
 
         if capability in {"create_folder", "create_file"}:
-            target = self._quoted_or_tail(text, ("called", "named", "folder", "file"))
-            if capability == "create_folder":
-                return {"path": target or "NewFolder"}
-            return {"path": target or "new_file.txt"}
+            target = self._quoted_or_tail(text, ("called", "named"))
+            if not target:
+                marker = "folder" if capability == "create_folder" else "file"
+                target = self._after_word(text, marker)
+            return {"path": target or ("NewFolder" if capability == "create_folder" else "new_file.txt")}
 
         if capability == "write_file":
             path = self._quoted_or_tail(text, ("file", "called", "named")) or "output.txt"
@@ -87,7 +75,7 @@ class TaskDecomposer:
             return {"path": path, "content": content}
 
         if capability == "read_file":
-            return {"path": self._quoted_or_tail(text, ("file", "called", "named")) or text}
+            return {"path": self._quoted_or_tail(text, ("file", "called", "named")) or self._after_word(text, "file") or text}
 
         if capability == "rename_file":
             source, destination = self._extract_from_to(text)
@@ -99,27 +87,30 @@ class TaskDecomposer:
 
         if capability == "delete_file":
             target = self._quoted_or_tail(text, ("file", "folder", "called", "named")) or text
-            confirmed = "confirmed" in lower or "yes, delete" in lower
-            return {
-                "path": target,
-                "require_confirmation": True,
-                "confirmed": confirmed,
-            }
+            return {"path": target, "require_confirmation": True, "confirmed": "confirmed" in lower}
 
         if capability == "list_directory":
-            path = self._quoted_or_tail(text, ("in", "inside", "folder", "directory")) or "."
-            return {"path": path}
+            path = self._quoted_or_tail(text, ("in", "inside", "folder", "directory"))
+            return {"path": path or "."}
 
         if capability == "search_files":
-            pattern = self._search_pattern(text)
-            return {"path": ".", "pattern": pattern, "recursive": True, "files_only": True}
+            return {"path": ".", "pattern": self._search_pattern(text), "recursive": True, "files_only": True}
 
         if capability == "open_url":
-            for token in text.split():
-                clean = token.strip(".,()[]")
-                if clean.startswith(("http://", "https://", "www.")):
-                    return {"url": clean}
-            return {"url": "https://" + text.replace(" ", "")}
+            # Accept bare domains, www domains, and explicit URLs.
+            match = re.search(r"(?:(?:https?://)|(?:www\.))[^\s]+", text, re.I)
+            if match:
+                url = match.group(0).rstrip(".,!?)]}")
+            else:
+                match = re.search(r"\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?:/[^\s]*)?", text, re.I)
+                if match:
+                    url = match.group(0).rstrip(".,!?)]}")
+                else:
+                    candidate = re.sub(r"^\s*(?:open|browse|visit|go to)\s+", "", text, flags=re.I).strip()
+                    url = candidate.replace(" ", "")
+            if not url.startswith(("http://", "https://")):
+                url = "https://" + url
+            return {"url": url}
 
         if capability == "power":
             for action in ("shutdown", "restart", "sleep", "hibernate", "lock", "logout"):
@@ -128,12 +119,12 @@ class TaskDecomposer:
 
         return {}
 
+    def _after_word(self, text: str, word: str) -> str | None:
+        match = re.search(rf"\b{re.escape(word)}\b\s+(.+)$", text, re.I)
+        return match.group(1).strip(" .\"'") if match else None
+
     def _extract_from_to(self, text: str) -> tuple[str | None, str | None]:
-        match = re.search(
-            r"(?:from\s+)?[\"']?(.+?)[\"']?\s+(?:to|into)\s+[\"']?(.+?)[\"']?$",
-            text,
-            re.I,
-        )
+        match = re.search(r"(?:from\s+)?[\"']?(.+?)[\"']?\s+(?:to|into)\s+[\"']?(.+?)[\"']?$", text, re.I)
         if match:
             return match.group(1).strip(" .\"'"), match.group(2).strip(" .\"'")
         return None, None
@@ -154,7 +145,7 @@ class TaskDecomposer:
             return quoted.group(1).strip()
         lower = text.lower()
         for marker in markers:
-            index = lower.find(marker)
+            index = lower.find(marker.lower())
             if index >= 0:
                 value = text[index + len(marker):].strip(" :.-")
                 if value:
@@ -162,24 +153,8 @@ class TaskDecomposer:
         return None
 
     def _search_pattern(self, text: str) -> str:
-        match = re.search(
-            r"\b(?:python|pdf|text|word|image|video|audio)\b",
-            text,
-            re.I,
-        )
+        match = re.search(r"\b(?:python|pdf|text|word|image|video|audio)\b", text, re.I)
         if match:
-            token = match.group(0).lower()
-            patterns = {
-                "python": "*.py",
-                "pdf": "*.pdf",
-                "text": "*.txt",
-                "word": "*.docx",
-                "image": "*.png",
-                "video": "*.mp4",
-                "audio": "*.mp3",
-            }
-            return patterns.get(token, "*")
+            return {"python": "*.py", "pdf": "*.pdf", "text": "*.txt", "word": "*.docx", "image": "*.png", "video": "*.mp4", "audio": "*.mp3"}[match.group(0).lower()]
         quoted = re.search(r"[\"']([^\"']+)[\"']", text)
-        if quoted:
-            return quoted.group(1)
-        return "*"
+        return quoted.group(1) if quoted else "*"
