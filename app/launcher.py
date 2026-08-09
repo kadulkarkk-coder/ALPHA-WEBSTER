@@ -98,8 +98,6 @@ class Launcher:
         self.service_registry.initialize(); self.provider_manager.initialize(); self.plugin_manager.initialize(); self.memory_manager.initialize(); self.conversation_manager.initialize(); self.messaging_manager.initialize(); self.event_bus.initialize(); self.voice_manager.initialize(); self.file_manager.initialize()
         self._register_services(); self._register_providers(); self._register_capabilities(); self._register_workflows()
         self.capability_engine.initialize(); self.planning_engine.initialize(); self.ai_engine.initialize()
-        # Some subsystem initializers may rebuild internal state. Reconcile the
-        # authoritative registry after every initializer and before commands are used.
         self._ensure_core_capabilities()
         self.voice_manager.set_processor(self.ai_engine.chat)
         from app.application import Application
@@ -117,10 +115,20 @@ class Launcher:
         self.provider_manager.set_default(self.gemini_provider.name)
 
     def _capability_objects(self):
-        objects = [OpenUrlCapability(), RefreshCapability(), BackCapability()]
-        for capability_type in (CreateFileCapability, CreateFolderCapability, DeleteFileCapability, RenameFileCapability, CopyFileCapability, MoveFileCapability, ReadFileCapability, WriteFileCapability, ListDirectoryCapability, SearchFilesCapability):
-            objects.append(capability_type(file_manager=self.file_manager))
-        return objects
+        return [
+            OpenUrlCapability(),
+            RefreshCapability(),
+            BackCapability(),
+            *(
+                capability_type(file_manager=self.file_manager)
+                for capability_type in (
+                    CreateFileCapability, CreateFolderCapability, DeleteFileCapability,
+                    RenameFileCapability, CopyFileCapability, MoveFileCapability,
+                    ReadFileCapability, WriteFileCapability, ListDirectoryCapability,
+                    SearchFilesCapability,
+                )
+            ),
+        ]
 
     def _register_capabilities(self) -> None:
         """Register all built-in capabilities without failing on duplicates."""
@@ -129,9 +137,16 @@ class Launcher:
                 self.capability_engine.register(capability)
 
     def _ensure_core_capabilities(self) -> None:
-        """Repair the shared registry if a subsystem removed a built-in capability."""
+        """Ensure required built-ins use their actual registry names."""
         self._register_capabilities()
-        required = {"open_url", "create_file", "create_folder", "delete_file", "rename_file", "copy_file", "move_file", "read_file", "write_file", "list_directory", "search_files", "refresh", "back"}
+        # BackCapability's public registry name is ``browser_back``.
+        # ``back`` was previously checked here even though no capability
+        # registered that name, causing startup to fail before the CLI opened.
+        required = {
+            "open_url", "create_file", "create_folder", "delete_file",
+            "rename_file", "copy_file", "move_file", "read_file", "write_file",
+            "list_directory", "search_files", "refresh", "browser_back",
+        }
         missing = sorted(name for name in required if not self.capability_engine.exists(name))
         if missing:
             raise RuntimeError("Core capability registration failed: " + ", ".join(missing))
