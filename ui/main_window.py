@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import threading
 import tkinter as tk
 from tkinter import messagebox
@@ -19,7 +20,7 @@ class MainWindow(tk.Tk):
         self.launcher = launcher
         self._busy = False
         self._voice = False
-        self.title("WEBSTER ALPHA")
+        self.title("WEBSTER ALPHA — SPIDER CORE")
         self.geometry("1280x800")
         self.minsize(980, 650)
         self.configure(bg=theme.BG)
@@ -27,7 +28,7 @@ class MainWindow(tk.Tk):
         self._build()
         self._draw_webs()
         self._refresh_status()
-        self.after(500, self._poll_voice)
+        self.after(700, self._poll_voice)
 
     def _build(self):
         self.header = tk.Frame(self, bg=theme.PANEL, height=theme.HEADER_H)
@@ -101,9 +102,9 @@ class MainWindow(tk.Tk):
     def _chat_worker(self, text):
         try:
             response = self.application.chat(text)
-            self.after(0, lambda: self.chat.add("Webster", str(response)))
+            self.after(0, lambda r=str(response): self.chat.add("Webster", r))
         except Exception as exc:
-            self.after(0, lambda: self.chat.add("Webster", f"I hit an error: {exc}"))
+            self.after(0, lambda e=str(exc): self.chat.add("Webster", f"I hit an error: {e}"))
         finally:
             self.after(0, lambda: setattr(self, "_busy", False))
 
@@ -151,23 +152,16 @@ class MainWindow(tk.Tk):
         self.chat.add("Webster", "Settings panel is ready for the next UI integration pass.")
 
     def _draw_webs(self):
-        # Subtle web motif behind the content. It is deliberately geometric and original.
         overlay = tk.Canvas(self.main, bg=theme.BG, highlightthickness=0)
-        overlay.place(relx=0.78, rely=0.10, relwidth=0.22, relheight=0.28)
-        w = 280
-        c = 140
-        for r in (35, 70, 105, 140):
+        overlay.place(relx=0.80, rely=0.08, relwidth=0.20, relheight=0.24)
+        c = 130
+        for r in (30, 60, 90, 120):
             overlay.create_oval(c-r, c-r, c+r, c+r, outline=theme.RED_DARK, width=1)
         for angle in range(0, 360, 30):
-            import math
-            x = c + 150 * math.cos(math.radians(angle))
-            y = c + 150 * math.sin(math.radians(angle))
+            x = c + 135 * math.cos(math.radians(angle))
+            y = c + 135 * math.sin(math.radians(angle))
             overlay.create_line(c, c, x, y, fill=theme.BLUE_DARK, width=1)
         overlay.lower()
 
     def _close(self):
-        try:
-            if self.launcher:
-                self.launcher.shutdown()
-        finally:
-            self.destroy()
+        self.destroy()
