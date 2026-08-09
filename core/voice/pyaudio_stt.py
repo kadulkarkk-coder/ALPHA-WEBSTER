@@ -1,4 +1,4 @@
-"""PyAudio microphone transport with VAD and faster-whisper."""
+"""PyAudio microphone transport with VAD, echo-aware barge-in and faster-whisper."""
 from __future__ import annotations
 
 import time
@@ -40,6 +40,8 @@ class PyAudioWhisperBackend(SpeechToTextBackend):
         self._device_name = None
         self._rms = 0.0
         self._last_threshold = self.threshold
+        self._echo_floor = 0.0
+        self._barge_triggered = False
 
     def initialize(self) -> None:
         if self._available:
@@ -64,6 +66,23 @@ class PyAudioWhisperBackend(SpeechToTextBackend):
                 except Exception: pass
             self._pa = None
 
+    def _open_stream(self):
+        import pyaudio
+        return self._pa.open(
+            format=pyaudio.paInt16,
+            channels=self.channels,
+            rate=self.sample_rate,
+            input=True,
+            input_device_index=self.device_index,
+            frames_per_buffer=self.chunk,
+        )
+
+    def _audio_rms(self, raw: bytes) -> float:
+        audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+        if self.channels > 1:
+            audio = audio.reshape(-1, self.channels).mean(axis=1)
+        return float(np.sqrt(np.mean(audio * audio) + 1e-12))
+
     def listen(self, timeout: float, phrase_timeout: float) -> str | None:
         if not self._available:
             self.initialize()
@@ -71,7 +90,6 @@ class PyAudioWhisperBackend(SpeechToTextBackend):
             return None
         if self._speaking and not self._allow_barge:
             return None
-        import pyaudio
         self._stop.clear()
         stream = None
         frames = []
@@ -85,9 +103,7 @@ class PyAudioWhisperBackend(SpeechToTextBackend):
         block_seconds = self.chunk / self.sample_rate
         phrase_limit = min(float(phrase_timeout), self.max_phrase)
         try:
-            stream = self._pa.open(format=pyaudio.paInt16, channels=self.channels, rate=self.sample_rate,
-                                   input=True, input_device_index=self.device_index,
-                                   frames_per_buffer=self.chunk)
+            stream = self._open_stream()
             self._listening = True
             while not self._stop.is_set():
                 now = time.monotonic()
@@ -106,7 +122,7 @@ class PyAudioWhisperBackend(SpeechToTextBackend):
                         calibrated = True
                 limit = self._last_threshold if calibrated else self.threshold
                 if self._speaking and self._allow_barge:
-                    limit *= float(getattr(self.config, "barge_in_threshold_multiplier", 3.0))
+                    limit = max(limit * float(getattr(self.config, "barge_in_threshold_multiplier", 3.0)), self._echo_floor * 1.6)
                 is_voice = rms >= limit
                 preroll.append(audio)
                 voiced = voiced + 1 if is_voice else 0
@@ -127,10 +143,16 @@ class PyAudioWhisperBackend(SpeechToTextBackend):
                 return None
             audio = np.concatenate(frames).astype(np.float32)
             audio -= float(np.mean(audio))
-            segments, _ = self._model.transcribe(audio, language=str(getattr(self.config, "language", "en")).split("-")[0],
-                                                  beam_size=1, best_of=1, temperature=0.0,
-                                                  vad_filter=True, condition_on_previous_text=False,
-                                                  without_timestamps=True)
+            segments, _ = self._model.transcribe(
+                audio,
+                language=str(getattr(self.config, "language", "en")).split("-")[0],
+                beam_size=1,
+                best_of=1,
+                temperature=0.0,
+                vad_filter=True,
+                condition_on_previous_text=False,
+                without_timestamps=True,
+            )
             text = " ".join(s.text.strip() for s in segments).strip()
             return text or None
         except Exception as exc:
@@ -142,9 +164,66 @@ class PyAudioWhisperBackend(SpeechToTextBackend):
                 try: stream.stop_stream(); stream.close()
                 except Exception: pass
 
+    def listen_for_barge_in(self, stop_event: Event) -> bool:
+        """Monitor the microphone for sustained user speech while TTS plays.
+
+        The first part of monitoring is used as an acoustic echo baseline.
+        A real interruption must then exceed both the normal VAD threshold and
+        that playback baseline for several consecutive blocks. This is not full
+        acoustic echo cancellation, but it prevents most short speaker-leakage
+        spikes from interrupting Webster.
+        """
+        if not self._available or self._pa is None or not self._allow_barge:
+            return False
+        stream = None
+        try:
+            stream = self._open_stream()
+            block_seconds = self.chunk / self.sample_rate
+            baseline_samples: list[float] = []
+            baseline_until = time.monotonic() + max(0.20, float(getattr(self.config, "echo_calibration_seconds", 0.35)))
+            consecutive = 0
+            required = max(3, int(getattr(self.config, "barge_in_start_blocks", 4)))
+            armed = False
+            while not stop_event.is_set() and self._speaking and self._allow_barge:
+                raw = stream.read(self.chunk, exception_on_overflow=False)
+                rms = self._audio_rms(raw)
+                self._rms = rms
+                now = time.monotonic()
+                if now < baseline_until:
+                    baseline_samples.append(rms)
+                    continue
+                if not armed:
+                    self._echo_floor = float(np.percentile(baseline_samples, 90)) if baseline_samples else 0.0
+                    armed = True
+                normal_limit = max(
+                    self._last_threshold * float(getattr(self.config, "barge_in_threshold_multiplier", 3.0)),
+                    self._echo_floor * float(getattr(self.config, "echo_multiplier", 1.8)),
+                )
+                if rms >= normal_limit:
+                    consecutive += 1
+                else:
+                    consecutive = 0
+                if consecutive >= required:
+                    self._barge_triggered = True
+                    return True
+                # Avoid starving the audio loop on unusual device drivers.
+                if block_seconds <= 0:
+                    time.sleep(0.005)
+            return False
+        except Exception as exc:
+            self._error = f"PyAudio barge-in monitor failed: {exc}"
+            return False
+        finally:
+            if stream is not None:
+                try: stream.stop_stream(); stream.close()
+                except Exception: pass
+
     def set_speaking(self, speaking: bool, allow_barge_in: bool = False) -> None:
         self._speaking = bool(speaking)
         self._allow_barge = bool(allow_barge_in)
+        if not self._allow_barge:
+            self._echo_floor = 0.0
+            self._barge_triggered = False
 
     def stop(self) -> None:
         self._stop.set()
