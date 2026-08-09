@@ -10,6 +10,7 @@ from __future__ import annotations
 from core.ai.response_builder import ResponseBuilder
 from core.ai.router import IntentRouter
 from core.capability.engine import CapabilityEngine
+from core.planning.analyzer import GoalAnalysis
 from core.planning.decomposer import TaskDecomposer
 from core.planning.goal import Goal
 from core.planning.planner import Planner
@@ -59,13 +60,23 @@ class CommandEngine:
             )
 
         goal = Goal(objective=message.strip(), priority=0)
-        analysis = self.decomposer._registry and self.decomposer.registry
-        # Let the decomposer use the same registered capability set as the launcher.
-        tasks = self.decomposer.decompose(goal)
+
+        # The IntentRouter has already identified the exact executable
+        # capability. Do not ask a second, independent analyzer to rediscover
+        # it; that was the source of the previous "no executable task" bug.
+        analysis = GoalAnalysis(
+            category=intent.category or "command",
+            required_capabilities=(intent.action,),
+            complexity="low",
+            estimated_tasks=1,
+            priority=goal.priority,
+            execution_strategy="sequential",
+        )
+
+        tasks = self.decomposer.decompose(goal, analysis=analysis)
         if not tasks:
             raise ValueError(
-                f"Command '{message.strip()}' was recognized as '{intent.action}', "
-                "but no executable task was produced."
+                f"Capability '{intent.action}' is registered, but task generation failed."
             )
 
         plan = self.planner.create_plan(goal.objective, tasks=tasks)
