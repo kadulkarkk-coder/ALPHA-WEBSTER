@@ -1,21 +1,17 @@
-"""Webster voice output facade."""
+"""Webster local voice output facade."""
 
 from __future__ import annotations
 
 from core.voice.config import VoiceConfig
-from core.voice.speaker_elevenlabs import ElevenLabsSpeaker
 from core.voice.speaker_pyttsx3 import Pyttsx3Speaker
 
 
 class VoiceSpeaker:
-    """Stable TTS facade with configurable cloud/local backend."""
+    """Stable offline TTS facade using the local Windows speech engine."""
 
     def __init__(self, config: VoiceConfig | None = None) -> None:
         self.config = config or VoiceConfig()
-        if self.config.output_backend == "elevenlabs":
-            self._backend = ElevenLabsSpeaker(self.config)
-        else:
-            self._backend = Pyttsx3Speaker(self.config)
+        self._backend = Pyttsx3Speaker(self.config)
         self._initialized = False
 
     def initialize(self) -> None:
