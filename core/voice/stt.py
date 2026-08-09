@@ -33,8 +33,6 @@ class SpeechToTextBackend(ABC):
 
 
 class NullSpeechBackend(SpeechToTextBackend):
-    """Safe fallback when no microphone STT backend is installed."""
-
     name = "none"
 
     def initialize(self) -> None:
@@ -55,7 +53,7 @@ class NullSpeechBackend(SpeechToTextBackend):
 
 
 class MicrophoneSpeechBackend(SpeechToTextBackend):
-    """SpeechRecognition backend with configurable voice activity detection."""
+    """Legacy SpeechRecognition backend kept as an optional local fallback."""
 
     name = "speech_recognition"
 
@@ -100,16 +98,11 @@ class MicrophoneSpeechBackend(SpeechToTextBackend):
             return None
         if self._speaking and not self._allow_barge_in:
             return None
-
         try:
             with self._microphone as source:
                 self._listening = True
                 self.configure_vad(self._vad_energy_threshold, self._vad_pause_threshold)
-                audio = self._recognizer.listen(
-                    source,
-                    timeout=timeout,
-                    phrase_time_limit=phrase_timeout,
-                )
+                audio = self._recognizer.listen(source, timeout=timeout, phrase_time_limit=phrase_timeout)
             text = self._recognizer.recognize_google(audio)
             return text.strip() or None
         except Exception as error:
@@ -123,8 +116,6 @@ class MicrophoneSpeechBackend(SpeechToTextBackend):
     def set_speaking(self, speaking: bool, allow_barge_in: bool = False) -> None:
         self._speaking = speaking
         self._allow_barge_in = allow_barge_in
-        if speaking and not allow_barge_in:
-            self._listening = False
 
     def stop(self) -> None:
         self._listening = False
@@ -150,3 +141,55 @@ class MicrophoneSpeechBackend(SpeechToTextBackend):
     @property
     def error(self) -> str | None:
         return self._error
+
+
+class ElevenLabsSpeechBackend(SpeechToTextBackend):
+    """ElevenLabs Scribe STT with sounddevice-based VAD recording."""
+
+    name = "elevenlabs"
+
+    def __init__(self, config=None) -> None:
+        from core.voice.elevenlabs import ElevenLabsClient, ElevenLabsSpeechBackend as _Backend
+
+        self._config = config
+        self._delegate = _Backend(
+            client=ElevenLabsClient(
+                tts_voice_id=getattr(config, "elevenlabs_voice_id", "JBFqnCBsd6RMkjVDRZzb"),
+                tts_model_id=getattr(config, "elevenlabs_tts_model", "eleven_multilingual_v2"),
+                stt_model_id=getattr(config, "elevenlabs_stt_model", "scribe_v2"),
+            )
+        )
+
+    def initialize(self) -> None:
+        self._delegate.initialize()
+
+    def configure_vad(self, energy_threshold: int = 300, pause_threshold: float = 0.8) -> None:
+        self._delegate.configure_vad(energy_threshold, pause_threshold)
+
+    def listen(self, timeout: float, phrase_timeout: float) -> str | None:
+        return self._delegate.listen(timeout, phrase_timeout)
+
+    def set_speaking(self, speaking: bool, allow_barge_in: bool = False) -> None:
+        self._delegate.set_speaking(speaking, allow_barge_in)
+
+    def stop(self) -> None:
+        self._delegate.stop()
+
+    def shutdown(self) -> None:
+        self._delegate.shutdown()
+
+    @property
+    def available(self) -> bool:
+        return self._delegate.available
+
+    @property
+    def listening(self) -> bool:
+        return self._delegate.listening
+
+    @property
+    def speaking(self) -> bool:
+        return self._delegate.speaking
+
+    @property
+    def error(self) -> str | None:
+        return self._delegate.error
