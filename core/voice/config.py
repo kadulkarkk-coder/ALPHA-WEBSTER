@@ -32,7 +32,8 @@ class VoiceConfig:
     wake_word: str = "webster"
     wake_word_timeout: float = 4.0
     vad_enabled: bool = True
-    vad_energy_threshold: float = 0.015
+    # Lower threshold for typical laptop microphones.
+    vad_energy_threshold: float = 0.008
     vad_pause_threshold: float = 0.8
     barge_in_enabled: bool = True
     barge_in_timeout: float = 0.8
