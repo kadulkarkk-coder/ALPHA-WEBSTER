@@ -57,12 +57,12 @@ class IntentRouter:
         self._patterns: list[tuple[IntentType, str, str]] = [
             (
                 IntentType.FILE,
-                r"\b(create|make|delete|remove|rename|move|copy|read|write|save|list|show|find|search)\b.*\b(file|files|folder|folders|directory|directories|document|documents|python files|pdfs)\b",
+                r"\b(create|make|delete|remove|rename|move|copy|read|write|save|list|show|find|search|open)\b.*\b(file|files|folder|folders|directory|directories|document|documents|python files|pdfs)\b",
                 "filesystem",
             ),
             (
                 IntentType.FILE,
-                r"\b(file|files|folder|folders|directory|directories)\b.*\b(create|make|delete|remove|rename|move|copy|read|write|save|list|show|find|search)\b",
+                r"\b(file|files|folder|folders|directory|directories)\b.*\b(create|make|delete|remove|rename|move|copy|read|write|save|list|show|find|search|open)\b",
                 "filesystem",
             ),
             (
@@ -99,7 +99,12 @@ class IntentRouter:
 
         for intent_type, pattern, category in self._patterns:
             if re.search(pattern, text):
-                action = self._file_action(text) if intent_type == IntentType.FILE else None
+                if intent_type == IntentType.FILE:
+                    action = self._file_action(text)
+                elif intent_type == IntentType.BROWSER:
+                    action = self._browser_action(text)
+                else:
+                    action = None
                 return Intent(
                     intent=intent_type,
                     confidence=0.95,
@@ -114,6 +119,9 @@ class IntentRouter:
         if len(text.split()) <= 3:
             return Intent(intent=IntentType.CHAT, confidence=0.75, category="conversation")
 
+        # Unknown natural-language requests should remain conversational until
+        # a concrete capability is identified. This prevents empty plans from
+        # reaching the strict plan validator.
         return Intent(intent=IntentType.ACTION, confidence=0.60, category="general")
 
     def _file_action(self, text: str) -> str | None:
@@ -126,12 +134,19 @@ class IntentRouter:
             ("move_file", ("move file", "relocate file")),
             ("copy_file", ("copy file",)),
             ("delete_file", ("delete file", "remove file", "delete folder", "remove folder")),
-            ("list_directory", ("list directory", "list files", "show files", "list folder", "show folder")),
+            ("list_directory", ("list directory", "list files", "show files", "list folder", "show folder", "open folder", "open directory")),
             ("search_files", ("search files", "find files", "find all", "search folder")),
         ):
             if any(word in text for word in words):
                 return action
         return None
+
+    def _browser_action(self, text: str) -> str | None:
+        if re.search(r"\b(refresh|reload)\b", text):
+            return "refresh"
+        if re.search(r"\b(back|go back)\b", text):
+            return "back"
+        return "open_url"
 
     def classify(self, message: str) -> Intent:
         return self.route(message)
