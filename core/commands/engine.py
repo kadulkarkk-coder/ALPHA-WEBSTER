@@ -1,10 +1,4 @@
-"""Deterministic command-to-capability execution for Webster.
-
-Part 1 keeps ordinary computer commands out of the LLM. A command that has
-already been classified by IntentRouter is converted directly into one Task;
-there is no second classifier/decomposer decision involved in the execution
-path.
-"""
+"""Deterministic command-to-capability execution for Webster."""
 
 from __future__ import annotations
 
@@ -39,7 +33,24 @@ class CommandEngine:
         self.capability_engine = capability_engine
         self.response_builder = response_builder
 
+    def _sync_authoritative_registry(self) -> None:
+        """Ensure all command-stage components use the live capability registry.
+
+        The CapabilityEngine owns the authoritative registry. Older initialization
+        paths could leave Planner, Validator, or TaskDecomposer holding a different
+        registry instance. That produced the contradictory state where a capability
+        existed during command routing but was reported as unknown during validation.
+        """
+        registry = self.capability_engine.registry
+        if getattr(self.planner, "_registry", None) is not registry:
+            self.planner._registry = registry
+        if getattr(self.validator, "_registry", None) is not registry:
+            self.validator._registry = registry
+        if getattr(self.decomposer, "_registry", None) is not registry:
+            self.decomposer._registry = registry
+
     def can_handle(self, message: str) -> bool:
+        self._sync_authoritative_registry()
         intent = self.router.route(message)
         return bool(
             intent.is_action
@@ -48,6 +59,7 @@ class CommandEngine:
         )
 
     def execute(self, message: str) -> str:
+        self._sync_authoritative_registry()
         intent = self.router.route(message)
 
         if not intent.is_action:
@@ -63,10 +75,6 @@ class CommandEngine:
                 f"Available capabilities: {available or 'none'}."
             )
 
-        # IMPORTANT: the router has already made the capability decision.
-        # Create the executable task directly instead of running a second
-        # analysis/decomposition pass. This guarantees that a recognized
-        # capability cannot disappear between routing and execution.
         goal = Goal(objective=message.strip(), priority=0)
         task = self.decomposer.create_task(goal, capability)
         task.validate()
@@ -94,8 +102,15 @@ class CommandEngine:
         return "Task completed successfully."
 
     def health(self) -> dict:
+        self._sync_authoritative_registry()
+        registry = self.capability_engine.registry
         return {
             "healthy": True,
             "capabilities": len(self.capability_engine.names()),
             "mode": "direct-capability",
+            "registry_synchronized": (
+                getattr(self.planner, "_registry", None) is registry
+                and getattr(self.validator, "_registry", None) is registry
+                and getattr(self.decomposer, "_registry", None) is registry
+            ),
         }
