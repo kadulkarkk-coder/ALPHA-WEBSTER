@@ -11,102 +11,86 @@ from core.planning.plan import Plan
 
 
 class Validator:
-    """
-    Validates execution plans before execution.
-    """
+    """Validates execution plans against the authoritative capability registry."""
 
-    def __init__(
-        self,
-        registry: CapabilityRegistry,
-    ) -> None:
-
+    def __init__(self, registry: CapabilityRegistry) -> None:
+        if registry is None:
+            raise ValueError("Validator requires a CapabilityRegistry.")
         self._registry = registry
 
     @property
     def registry(self) -> CapabilityRegistry:
         return self._registry
 
-    # ---------------------------------------------------------
-
-    def validate(
-        self,
-        plan: Plan,
-    ) -> tuple[bool, list[str]]:
-        """
-        Validate a complete plan.
-        """
-
+    def validate(self, plan: Plan) -> tuple[bool, list[str]]:
+        """Perform a complete, deterministic pre-execution validation."""
         errors: list[str] = []
 
-        if not plan.goal.strip():
+        if plan is None:
+            return False, ["Plan cannot be None."]
 
-            errors.append(
-                "Plan goal cannot be empty."
-            )
+        goal = str(plan.goal or "").strip()
+        if not goal:
+            errors.append("Plan goal cannot be empty.")
 
         if plan.is_empty:
+            errors.append("Plan contains no steps.")
+            return False, errors
 
-            errors.append(
-                "Plan contains no steps."
-            )
-
-        seen = set()
+        seen: set[tuple[str, str]] = set()
 
         for index, step in enumerate(plan.steps):
+            prefix = f"Step {index + 1}"
+            capability = str(step.capability or "").strip().lower()
 
-            if not step.capability or not step.capability.strip():
-
-                errors.append(f"Step {index + 1}: capability is empty.")
-
+            if not capability:
+                errors.append(f"{prefix}: capability is empty.")
                 continue
 
-            if not self.registry.exists(step.capability):
+            if capability != step.capability:
+                # Keep the plan internally canonical. The registry is
+                # case-insensitive, but downstream execution should receive
+                # exactly the same canonical name that was validated.
+                step.capability = capability
 
+            if not self._registry.exists(capability):
                 errors.append(
-                    f"Step {index + 1}: Unknown capability '{step.capability}'."
+                    f"{prefix}: Unknown capability '{capability}'."
                 )
 
             if not isinstance(step.arguments, dict):
+                errors.append(f"{prefix}: arguments must be a dictionary.")
+                arguments_key = "<invalid>"
+            else:
+                arguments_key = repr(sorted(step.arguments.items(), key=lambda item: str(item[0])))
 
-                errors.append(
-                    f"Step {index + 1}: arguments must be a dictionary."
-                )
-
-            # duplicate detection by capability+arguments
-            key = (step.capability, repr(step.arguments))
-
+            key = (capability, arguments_key)
             if key in seen:
-
-                errors.append(f"Step {index + 1}: duplicate step detected.")
-
+                errors.append(f"{prefix}: duplicate step detected.")
             seen.add(key)
 
-            # ordering validation: if step.metadata contains 'requires', ensure required caps appear earlier
-            requires = step.metadata.get("requires") if isinstance(step.metadata, dict) else None
-
+            metadata = step.metadata if isinstance(step.metadata, dict) else {}
+            requires = metadata.get("requires")
             if requires:
-                for req in requires:
-                    found = any(s.capability == req for s in plan.steps[:index])
-                    if not found:
+                if isinstance(requires, str):
+                    requires = [requires]
+                if not isinstance(requires, (list, tuple, set)):
+                    errors.append(f"{prefix}: metadata.requires must be a string or sequence.")
+                    requires = []
+
+                previous = {
+                    str(previous_step.capability).strip().lower()
+                    for previous_step in plan.steps[:index]
+                }
+                for required in requires:
+                    required_name = str(required).strip().lower()
+                    if required_name and required_name not in previous:
                         errors.append(
-                            f"Step {index + 1}: requires capability '{req}' earlier in the plan."
+                            f"{prefix}: requires capability '{required_name}' earlier in the plan."
                         )
 
-        return (
-            len(errors) == 0,
-            errors,
-        )
+        return len(errors) == 0, errors
 
-    # ---------------------------------------------------------
-
-    def is_valid(
-        self,
-        plan: Plan,
-    ) -> bool:
-        """
-        Convenience helper.
-        """
-
+    def is_valid(self, plan: Plan) -> bool:
         valid, _ = self.validate(plan)
-
         return valid
