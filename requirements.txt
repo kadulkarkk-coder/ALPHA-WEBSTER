@@ -1,18 +1,21 @@
 # Webster Alpha
 # Python 3.11+
 #
-# Ollama itself is installed separately and runs as a local service.
-# The Python client communicates with it through HTTP.
+# Ollama is installed separately and runs as a local service.
+# ElevenLabs voice uses its cloud API; store ELEVENLABS_API_KEY in the
+# user's environment or .env file and never commit the key.
 
-# HTTP client used by OllamaProvider
+# HTTP / Ollama / ElevenLabs API
 requests>=2.32.0,<3
 
-# Environment/configuration support
+# Environment configuration
 python-dotenv>=1.0.1,<2
 
-# Voice output/input dependencies currently used by the voice subsystem
+# ElevenLabs voice input/output
+sounddevice>=0.5.2,<1
+numpy>=2.0,<3
+miniaudio>=1.61,<2
+
+# Optional legacy local TTS/STT fallback
 pyttsx3>=2.98,<3
 SpeechRecognition>=3.10.4,<4
-
-# Microphone backend for SpeechRecognition on Windows
-PyAudio>=0.2.14,<1
