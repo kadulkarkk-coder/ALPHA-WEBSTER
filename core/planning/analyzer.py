@@ -29,11 +29,11 @@ class GoalAnalyzer:
         (("move file", "relocate file"), "filesystem", ("move_file",)),
         (("copy file",), "filesystem", ("copy_file",)),
         (("delete file", "remove file", "delete folder", "remove folder"), "filesystem", ("delete_file",)),
-        (("list directory", "list files", "show files", "list folder", "show folder"), "filesystem", ("list_directory",)),
+        (("list directory", "list files", "show files", "list folder", "show folder", "open folder", "open directory"), "filesystem", ("list_directory",)),
         (("search files", "find files", "find all", "search folder"), "filesystem", ("search_files",)),
-        (("open url", "go to", "visit", "open website", "open chatgpt"), "internet", ("open_url",)),
+        (("open url", "open website", "open http", "open https", "go to", "visit", "open chatgpt", "open google"), "internet", ("open_url",)),
         (("refresh", "reload"), "internet", ("refresh",)),
-        (("back",), "internet", ("back",)),
+        (("back", "go back"), "internet", ("back",)),
         (("shutdown", "restart", "sleep", "hibernate", "lock", "logout"), "system", ("power",)),
     )
 
