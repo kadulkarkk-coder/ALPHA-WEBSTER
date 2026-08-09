@@ -1,8 +1,4 @@
-"""
-Webster Alpha
-
-Artificial Intelligence Engine
-"""
+"""Webster Alpha - Artificial Intelligence Engine."""
 
 from __future__ import annotations
 
@@ -32,7 +28,6 @@ class AIEngine:
         goal_builder: GoalBuilder,
         response_builder: ResponseBuilder,
     ) -> None:
-
         self.provider_manager = provider_manager
         self.planning_engine = planning_engine
         self.capability_engine = capability_engine
@@ -42,201 +37,112 @@ class AIEngine:
         self.goal_builder = goal_builder
         self.response_builder = response_builder
         self._initialized = False
+        self._pending_confirmation: str | None = None
 
-    # =====================================================
-    # Lifecycle
-    # =====================================================
-
-    def initialize(
-        self,
-    ) -> None:
-
+    def initialize(self) -> None:
         if self._initialized:
-
             return
-
         self._initialized = True
 
-    def shutdown(
-        self,
-    ) -> None:
-
+    def shutdown(self) -> None:
+        self._pending_confirmation = None
         self._initialized = False
 
     @property
-    def initialized(
-        self,
-    ) -> bool:
-
+    def initialized(self) -> bool:
         return self._initialized
 
-    # =====================================================
-    # Public API
-    # =====================================================
+    def chat(self, message: str) -> str:
+        return self.process(message).text
 
-    def chat(
-        self,
-        message: str,
-    ) -> str:
-
-        response = self.process(message)
-
-        return response.text
-
-    def ask(
-        self,
-        prompt: str,
-    ) -> str:
-
+    def ask(self, prompt: str) -> str:
         return self.chat(prompt)
 
-    def execute(
-        self,
-        command: str,
-    ) -> AIResponse:
-
+    def execute(self, command: str) -> AIResponse:
         return self.process(command)
 
-    # =====================================================
-    # Processing
-    # =====================================================
-
-    def process(
-        self,
-        message: str,
-    ) -> AIResponse:
-        """Process a user request through chat or planning."""
-
+    def process(self, message: str) -> AIResponse:
+        """Process conversational requests and validated executable goals."""
         if not self._initialized:
-
             self.initialize()
 
         message = str(message).strip()
-
         if not message:
+            return AIResponse.error("Message cannot be empty.")
 
-            return AIResponse.error(
-                "Message cannot be empty."
-            )
+        self.conversation_manager.add_user_message(message)
 
-        self.conversation_manager.add_user_message(
-            message
-        )
+        # Resolve a pending destructive-operation confirmation before routing
+        # the answer as ordinary chat.
+        if self._pending_confirmation is not None:
+            normalized = message.lower().strip()
+            if normalized in {"yes", "y", "confirm", "confirmed", "do it", "yes, delete"}:
+                original = self._pending_confirmation
+                self._pending_confirmation = None
+                message = original + " confirmed"
+            elif normalized in {"no", "n", "cancel", "stop", "don't", "do not"}:
+                self._pending_confirmation = None
+                response = AIResponse(content="Okay. I cancelled the pending file operation.", success=True)
+                self.conversation_manager.add_assistant_message(response.text)
+                return response
 
-        intent = self.router.route(
-            message
-        )
-
-        # -------------------------------------------------
-        # Conversational / question request
-        # -------------------------------------------------
+        intent = self.router.route(message)
 
         if intent.is_chat or intent.is_question:
-
             request = AIRequest(
                 prompt=message,
                 context=self.conversation_manager.context,
             )
-
-            response = self.provider_manager.generate(
-                request
-            )
-
-        # -------------------------------------------------
-        # Capability / workflow request
-        # -------------------------------------------------
-
+            response = self.provider_manager.generate(request)
         else:
+            # Destructive filesystem operations require an explicit second
+            # user turn. This prevents a natural-language misclassification
+            # from deleting files immediately.
+            if intent.action == "delete_file" and "confirmed" not in message.lower():
+                self._pending_confirmation = message
+                response = AIResponse(
+                    content="I found a file operation that would delete data. "
+                    "Please confirm by replying 'yes' or cancel with 'no'.",
+                    success=True,
+                )
+            else:
+                goal = self.goal_builder.build(message, intent)
+                result = self.planning_engine.execute_goal(goal)
+                response_text = self.response_builder.build(result)
+                response = AIResponse(
+                    content=response_text,
+                    success=getattr(result, "success", True),
+                )
 
-            goal = self.goal_builder.build(
-                message,
-                intent,
-            )
-
-            result = self.planning_engine.execute_goal(
-                goal
-            )
-
-            response_text = self.response_builder.build(
-                result
-            )
-
-            response = AIResponse(
-                content=response_text,
-                success=getattr(
-                    result,
-                    "success",
-                    True,
-                ),
-            )
-
-        self.conversation_manager.add_assistant_message(
-            response.text
-        )
-
+        self.conversation_manager.add_assistant_message(response.text)
         return response
 
-    # =====================================================
-    # Streaming
-    # =====================================================
-
-    def stream(
-        self,
-        message: str,
-    ):
-        """Stream a response from the active provider."""
-
+    def stream(self, message: str):
+        """Stream a conversational response from the active provider."""
         message = str(message).strip()
-
         if not message:
-
-            raise ValueError(
-                "Message cannot be empty."
-            )
-
+            raise ValueError("Message cannot be empty.")
         if not self._initialized:
-
             self.initialize()
 
-        self.conversation_manager.add_user_message(
-            message
-        )
-
+        self.conversation_manager.add_user_message(message)
         request = AIRequest(
             prompt=message,
             context=self.conversation_manager.context,
             stream=True,
         )
-
         chunks = []
-
-        for chunk in self.provider_manager.stream(
-            request
-        ):
-
+        for chunk in self.provider_manager.stream(request):
             chunks.append(chunk)
             yield chunk
-
         if chunks:
+            self.conversation_manager.add_assistant_message("".join(chunks))
 
-            self.conversation_manager.add_assistant_message(
-                "".join(chunks)
-            )
-
-    # =====================================================
-    # Health
-    # =====================================================
-
-    def health(
-        self,
-    ) -> dict:
-
+    def health(self) -> dict:
         return {
             "initialized": self._initialized,
-            "healthy": (
-                self._initialized
-                and self.provider_manager.ready
-            ),
+            "healthy": self._initialized and self.provider_manager.ready,
+            "pending_confirmation": self._pending_confirmation is not None,
             "provider_manager": self.provider_manager.health(),
             "planning_engine": self.planning_engine.health(),
             "capability_engine": self.capability_engine.health(),
@@ -244,12 +150,5 @@ class AIEngine:
             "memory_manager": self.memory_manager.health(),
         }
 
-    def __repr__(
-        self,
-    ) -> str:
-
-        return (
-            "AIEngine("
-            f"initialized={self._initialized}"
-            ")"
-        )
+    def __repr__(self) -> str:
+        return f"AIEngine(initialized={self._initialized})"
