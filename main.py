@@ -12,7 +12,7 @@ def _print_voice_status(launcher: Launcher) -> None:
     print(f"  loop:       {health['voice_loop_running']}")
     print(f"  input:      {health['input_backend']}")
     print(f"  available:  {health['input_available']}")
-    print(f"  device:     {health.get('input_device') or '<default>''}")
+    print(f"  device:     {health.get('input_device') or '<default>'}")
     print(f"  listening:  {health['listening']}")
     print(f"  wake word:  {health['wake_word']}")
     print(f"  last heard: {health.get('last_heard') or '<nothing transcribed yet>'}")
