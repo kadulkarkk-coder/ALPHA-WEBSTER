@@ -37,7 +37,6 @@ class PlanningEngine:
         event_bus: EventBus | None = None,
         registry: CapabilityRegistry | None = None,
     ) -> None:
-
         dependencies = {
             "capability_engine": capability_engine,
             "manager": manager,
@@ -47,18 +46,10 @@ class PlanningEngine:
             "analyzer": analyzer,
             "decomposer": decomposer,
         }
-
-        missing = [
-            name
-            for name, value in dependencies.items()
-            if value is None
-        ]
-
+        missing = [name for name, value in dependencies.items() if value is None]
         if missing:
-
             raise ValueError(
-                "PlanningEngine missing injected dependencies: "
-                + ", ".join(missing)
+                "PlanningEngine missing injected dependencies: " + ", ".join(missing)
             )
 
         self._capability_engine = capability_engine
@@ -72,48 +63,21 @@ class PlanningEngine:
         self._registry = registry
         self._initialized = False
 
-    # =====================================================
-    # Lifecycle
-    # =====================================================
-
-    def initialize(
-        self,
-    ) -> None:
-
+    def initialize(self) -> None:
         if self._initialized:
             return
-
         if self._registry is None:
-
-            raise RuntimeError(
-                "PlanningEngine requires a CapabilityRegistry."
-            )
-
+            raise RuntimeError("PlanningEngine requires a CapabilityRegistry.")
         self._initialized = True
 
-    def shutdown(
-        self,
-    ) -> None:
-
-        if not self._initialized:
-            return
-
+    def shutdown(self) -> None:
         self._initialized = False
 
-    def _ensure_initialized(
-        self,
-    ) -> None:
-
+    def _ensure_initialized(self) -> None:
         if not self._initialized:
-
             raise RuntimeError(
-                "PlanningEngine has not been initialized. "
-                "Call initialize() first."
+                "PlanningEngine has not been initialized. Call initialize() first."
             )
-
-    # =====================================================
-    # Properties
-    # =====================================================
 
     @property
     def capability_engine(self) -> CapabilityEngine:
@@ -145,90 +109,85 @@ class PlanningEngine:
 
     @property
     def ready(self) -> bool:
-        return (
-            self._initialized
-            and self._registry is not None
-        )
+        return self._initialized and self._registry is not None
 
-    # =====================================================
-    # Planning
-    # =====================================================
+    def _build_tasks(self, goal: Goal) -> list[Task]:
+        """Analyze and decompose a goal into executable capability tasks."""
+        analysis = self._analyzer.analyze(goal)
+        tasks = self._decomposer.decompose(goal, analysis)
+
+        # Keep the planner deterministic: an actionable analysis must produce
+        # at least one task. This prevents the old "empty plan" failure when a
+        # caller forgot to pass tasks explicitly.
+        if analysis.required_capabilities and not tasks:
+            missing = [
+                capability
+                for capability in analysis.required_capabilities
+                if self._registry is None or not self._registry.exists(capability)
+            ]
+            if missing:
+                raise ValueError(
+                    "Required capability is not registered: " + ", ".join(missing)
+                )
+            raise ValueError(
+                "Goal was recognized as actionable, but no executable tasks were created."
+            )
+
+        return tasks
 
     def create_plan(
         self,
         goal_text: str,
         tasks: list[Task] | None = None,
     ) -> Plan:
-
+        """Create a plan; automatically build tasks when callers omit them."""
         self._ensure_initialized()
 
-        plan = self.planner.create_plan(
-            goal_text,
-            tasks=tasks,
-        )
+        if tasks is None:
+            goal = Goal(objective=goal_text, priority=0)
+            goal.validate()
+            tasks = self._build_tasks(goal)
 
+        plan = self.planner.create_plan(goal_text, tasks=tasks)
         self.manager.add_plan(plan)
-
         return plan
 
-    def validate(
-        self,
-        plan: Plan,
-    ) -> bool:
+    def to_plan_step(self, task: Task) -> PlanStep:
+        return PlanStep(capability=task.capability, arguments=task.arguments or {})
 
+    def available_capabilities(self) -> list[str]:
+        return list(self.registry.names()) if self.registry else []
+
+    def has_capability(self, capability: str) -> bool:
+        return self.registry.exists(capability) if self.registry else False
+
+    def validate(self, plan: Plan) -> bool:
         return self.validator.is_valid(plan)
 
-    def validate_plan(
-        self,
-        plan: Plan,
-    ) -> tuple[bool, list[str]]:
-
+    def validate_plan(self, plan: Plan) -> tuple[bool, list[str]]:
         return self.validator.validate(plan)
 
-    def plan_goal(
-        self,
-        request,
-    ) -> Plan:
-
+    def plan_goal(self, request) -> Plan:
         self._ensure_initialized()
-
         if isinstance(request, Goal):
             goal = request
         elif isinstance(request, str):
-            goal = Goal(
-                objective=request,
-                priority=0,
-            )
+            goal = Goal(objective=request, priority=0)
         else:
-
-            raise TypeError(
-                "plan_goal expects a Goal or string objective"
-            )
+            raise TypeError("plan_goal expects a Goal or string objective")
 
         goal.validate()
         self.manager.add_goal(goal)
-
-        analysis: GoalAnalysis = self._analyzer.analyze(
-            goal
-        )
-
-        tasks: list[Task] = self._decomposer.decompose(
-            goal,
-            analysis,
-        )
+        tasks = self._build_tasks(goal)
 
         for task in tasks:
-
             task.validate()
             self.manager.add_task(task)
 
-        plan = self.create_plan(
-            goal.objective,
-            tasks=tasks,
-        )
+        plan = self.planner.create_plan(goal.objective, tasks=tasks)
+        self.manager.add_plan(plan)
 
         if self._event_bus is not None:
-
             self._event_bus.publish(
                 Event(
                     name=EventType.PLANNING_STARTED.name,
@@ -236,37 +195,22 @@ class PlanningEngine:
                     data={
                         "goal": goal.objective,
                         "plan_id": plan.id,
-                        "tasks": [
-                            task.capability
-                            for task in tasks
-                        ],
+                        "tasks": [task.capability for task in tasks],
                     },
                 )
             )
-
         return plan
 
-    def execute_plan(
-        self,
-        plan: Plan,
-    ):
-
+    def execute_plan(self, plan: Plan):
         self._ensure_initialized()
-
         valid, errors = self.validate_plan(plan)
-
         if not valid:
-
-            raise ValueError(
-                f"Plan validation failed: {errors}"
-            )
+            raise ValueError(f"Plan validation failed: {errors}")
 
         result = self.executor.execute(plan)
-
         self.manager.add_history(plan)
 
         if self._event_bus is not None:
-
             self._event_bus.publish(
                 Event(
                     name=EventType.PLANNING_COMPLETED.name,
@@ -274,107 +218,46 @@ class PlanningEngine:
                     data={
                         "plan_id": plan.id,
                         "goal": plan.goal,
-                        "success": getattr(
-                            result,
-                            "success",
-                            True,
-                        ),
+                        "success": getattr(result, "success", True),
                     },
                 )
             )
-
         return result
 
-    def execute_goal(
-        self,
-        request,
-    ):
+    def execute_goal(self, request):
+        return self.execute_plan(self.plan_goal(request))
 
-        plan = self.plan_goal(request)
-
-        return self.execute_plan(plan)
-
-    # =====================================================
-    # Workflows
-    # =====================================================
-
-    def create_workflow(
-        self,
-        name: str,
-        goals: list[str] | None = None,
-    ):
-
+    def create_workflow(self, name: str, goals: list[str] | None = None):
         self._ensure_initialized()
-
         from core.planning.workflow import Workflow
-
         workflow = Workflow(name=name)
-
         if goals:
-
             for goal in goals:
-
-                workflow.add_plan(
-                    self.plan_goal(goal)
-                )
-
+                workflow.add_plan(self.plan_goal(goal))
         self.manager.add_workflow(workflow)
-
         return workflow
 
-    def execute_workflow(
-        self,
-        workflow_name: str,
-    ) -> list[Plan]:
-
+    def execute_workflow(self, workflow_name: str) -> list[Plan]:
         self._ensure_initialized()
-
-        workflow = None
-
-        for candidate in self.manager._workflows.values():
-
-            if candidate.name == workflow_name:
-
-                workflow = candidate
-                break
-
+        workflow = next(
+            (candidate for candidate in self.manager._workflows.values() if candidate.name == workflow_name),
+            None,
+        )
         if workflow is None:
-
-            raise KeyError(
-                f"Workflow '{workflow_name}' not found."
-            )
-
+            raise KeyError(f"Workflow '{workflow_name}' not found.")
         results: list[Plan] = []
-
         workflow.status = "running"
-
         for plan in workflow.plans:
-
             self.execute_plan(plan)
             results.append(plan)
-
         workflow.status = "completed"
-
         return results
 
-    # =====================================================
-    # Management
-    # =====================================================
-
-    def cancel(
-        self,
-        plan_id: str,
-    ) -> None:
+    def cancel(self, plan_id: str) -> None:
         self.manager.remove_plan(plan_id)
 
-    def clear(
-        self,
-    ) -> None:
+    def clear(self) -> None:
         self.manager.clear()
-
-    # =====================================================
-    # Statistics
-    # =====================================================
 
     @property
     def plan_count(self) -> int:
@@ -388,14 +271,7 @@ class PlanningEngine:
     def history(self):
         return self.manager.history
 
-    # =====================================================
-    # Health
-    # =====================================================
-
-    def health(
-        self,
-    ) -> dict:
-
+    def health(self) -> dict:
         return {
             "initialized": self._initialized,
             "ready": self.ready,
