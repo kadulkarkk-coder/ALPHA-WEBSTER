@@ -100,6 +100,11 @@ def main() -> None:
 
             if lower == "voice test":
                 print()
+                # The normal hands-free loop must be paused so the diagnostic
+                # test is the only owner of the microphone stream.
+                was_running = launcher.voice_manager.health()["voice_loop_running"]
+                if was_running:
+                    launcher.stop_voice()
                 print("Speak now. Say a short sentence...")
                 text = launcher.voice_manager.listen(ignore_wake_word=True)
                 if text:
@@ -108,6 +113,8 @@ def main() -> None:
                 else:
                     print("[VOICE TEST] No speech was transcribed.")
                     _print_voice_status(launcher)
+                if was_running:
+                    launcher.start_voice()
                 continue
 
             if lower == "status":
