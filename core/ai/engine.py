@@ -15,7 +15,11 @@ from core.conversation.manager import ConversationManager
 
 
 class AIEngine:
-    """Webster's central intelligence engine."""
+    """Webster's intelligence layer.
+
+    Deterministic computer commands are handled by CommandEngine first.
+    The LLM is used for conversation and questions, not for basic tool routing.
+    """
 
     def __init__(
         self,
@@ -27,6 +31,7 @@ class AIEngine:
         router: IntentRouter,
         goal_builder: GoalBuilder,
         response_builder: ResponseBuilder,
+        command_engine=None,
     ) -> None:
         self.provider_manager = provider_manager
         self.planning_engine = planning_engine
@@ -36,6 +41,7 @@ class AIEngine:
         self.router = router
         self.goal_builder = goal_builder
         self.response_builder = response_builder
+        self.command_engine = command_engine
         self._initialized = False
         self._pending_confirmation: str | None = None
 
@@ -62,14 +68,10 @@ class AIEngine:
         return self.process(command)
 
     def _chat_with_provider(self, message: str) -> AIResponse:
-        request = AIRequest(
-            prompt=message,
-            context=self.conversation_manager.context,
-        )
+        request = AIRequest(prompt=message, context=self.conversation_manager.context)
         return self.provider_manager.generate(request)
 
     def process(self, message: str) -> AIResponse:
-        """Process conversational requests and validated executable goals."""
         if not self._initialized:
             self.initialize()
 
@@ -79,8 +81,6 @@ class AIEngine:
 
         self.conversation_manager.add_user_message(message)
 
-        # Resolve a pending destructive-operation confirmation before routing
-        # the answer as ordinary chat.
         if self._pending_confirmation is not None:
             normalized = message.lower().strip()
             if normalized in {"yes", "y", "confirm", "confirmed", "do it", "yes, delete"}:
@@ -95,38 +95,39 @@ class AIEngine:
 
         intent = self.router.route(message)
 
-        if intent.is_chat or intent.is_question:
-            response = self._chat_with_provider(message)
-        elif intent.is_action and intent.action is None:
-            # A generic action without a known executable capability is not a
-            # valid plan. Keep it conversational instead of creating an empty
-            # plan that will fail strict validation.
-            response = self._chat_with_provider(message)
-        else:
-            # Destructive filesystem operations require an explicit second
-            # user turn. This prevents a natural-language misclassification
-            # from deleting files immediately.
+        # Part 1: execute every recognized, registered single command directly.
+        # This completely removes the empty-plan failure from ordinary commands.
+        if self.command_engine is not None and self.command_engine.can_handle(message):
             if intent.action == "delete_file" and "confirmed" not in message.lower():
                 self._pending_confirmation = message
                 response = AIResponse(
-                    content="I found a file operation that would delete data. "
-                    "Please confirm by replying 'yes' or cancel with 'no'.",
+                    content="I found a file operation that would delete data. Please confirm by replying 'yes' or cancel with 'no'.",
                     success=True,
                 )
             else:
-                goal = self.goal_builder.build(message, intent)
-                result = self.planning_engine.execute_goal(goal)
-                response_text = self.response_builder.build(result)
-                response = AIResponse(
-                    content=response_text,
-                    success=getattr(result, "success", True),
-                )
+                try:
+                    text = self.command_engine.execute(message)
+                    response = AIResponse(content=text, success=True)
+                except Exception as error:
+                    response = AIResponse.error(str(error))
+        elif intent.is_chat or intent.is_question:
+            response = self._chat_with_provider(message)
+        elif intent.is_action:
+            # Don't manufacture an empty plan. Explain that no executable
+            # capability is currently registered for this command.
+            action = intent.action or "unknown"
+            available = ", ".join(self.capability_engine.names())
+            response = AIResponse.error(
+                f"No registered capability can execute this command (requested: {action}). "
+                f"Available capabilities: {available or 'none'}."
+            )
+        else:
+            response = self._chat_with_provider(message)
 
         self.conversation_manager.add_assistant_message(response.text)
         return response
 
     def stream(self, message: str):
-        """Stream a conversational response from the active provider."""
         message = str(message).strip()
         if not message:
             raise ValueError("Message cannot be empty.")
@@ -134,11 +135,7 @@ class AIEngine:
             self.initialize()
 
         self.conversation_manager.add_user_message(message)
-        request = AIRequest(
-            prompt=message,
-            context=self.conversation_manager.context,
-            stream=True,
-        )
+        request = AIRequest(prompt=message, context=self.conversation_manager.context, stream=True)
         chunks = []
         for chunk in self.provider_manager.stream(request):
             chunks.append(chunk)
@@ -151,6 +148,7 @@ class AIEngine:
             "initialized": self._initialized,
             "healthy": self._initialized and self.provider_manager.ready,
             "pending_confirmation": self._pending_confirmation is not None,
+            "command_engine": self.command_engine.health() if self.command_engine else {"healthy": False},
             "provider_manager": self.provider_manager.health(),
             "planning_engine": self.planning_engine.health(),
             "capability_engine": self.capability_engine.health(),
