@@ -1,8 +1,8 @@
 """ElevenLabs voice backend for Webster Alpha.
 
 This module keeps cloud voice concerns behind Webster's existing voice
-interfaces. It uses the official ElevenLabs HTTP API so the core voice
-engine does not depend on a particular SDK version.
+interfaces. It uses the ElevenLabs HTTP API so the core voice engine does
+not depend on a particular SDK version.
 """
 
 from __future__ import annotations
@@ -26,14 +26,7 @@ class ElevenLabsClient:
 
     BASE_URL = "https://api.elevenlabs.io/v1"
 
-    def __init__(
-        self,
-        api_key: str | None = None,
-        *,
-        tts_voice_id: str = "JBFqnCBsd6RMkjVDRZzb",
-        tts_model_id: str = "eleven_multilingual_v2",
-        stt_model_id: str = "scribe_v2",
-    ) -> None:
+    def __init__(self, api_key: str | None = None, *, tts_voice_id: str = "JBFqnCBsd6RMkjVDRZzb", tts_model_id: str = "eleven_multilingual_v2", stt_model_id: str = "scribe_v2") -> None:
         self.api_key = (api_key or os.getenv("ELEVENLABS_API_KEY", "")).strip()
         self.tts_voice_id = tts_voice_id.strip()
         self.tts_model_id = tts_model_id.strip()
@@ -54,7 +47,6 @@ class ElevenLabsClient:
         data = {"model_id": self.stt_model_id}
         if language_code and language_code.lower() not in {"auto", "none"}:
             data["language_code"] = language_code.split("-")[0].lower()
-
         try:
             response = requests.post(
                 f"{self.BASE_URL}/speech-to-text",
@@ -64,8 +56,7 @@ class ElevenLabsClient:
                 timeout=60,
             )
             response.raise_for_status()
-            text = response.json().get("text", "")
-            return str(text).strip()
+            return str(response.json().get("text", "")).strip()
         except Exception as error:
             raise ElevenLabsError(f"ElevenLabs STT failed: {error}") from error
 
@@ -74,16 +65,12 @@ class ElevenLabsClient:
 
         if not text.strip():
             return b""
-        payload = {
-            "text": text,
-            "model_id": self.tts_model_id,
-        }
         try:
             response = requests.post(
                 f"{self.BASE_URL}/text-to-speech/{self.tts_voice_id}",
                 params={"output_format": output_format},
                 headers={**self._headers(), "Content-Type": "application/json"},
-                json=payload,
+                json={"text": text, "model_id": self.tts_model_id},
                 timeout=60,
             )
             response.raise_for_status()
@@ -94,37 +81,26 @@ class ElevenLabsClient:
 
 def pcm16_wav(samples: np.ndarray, sample_rate: int = 16_000) -> bytes:
     """Encode mono float32 samples as 16-bit PCM WAV."""
-    samples = np.asarray(samples, dtype=np.float32).reshape(-1)
-    samples = np.clip(samples, -1.0, 1.0)
-    pcm = (samples * 32767.0).astype(np.int16).tobytes()
+    samples = np.clip(np.asarray(samples, dtype=np.float32).reshape(-1), -1.0, 1.0)
     buffer = io.BytesIO()
     with wave.open(buffer, "wb") as wav:
         wav.setnchannels(1)
         wav.setsampwidth(2)
         wav.setframerate(sample_rate)
-        wav.writeframes(pcm)
+        wav.writeframes((samples * 32767.0).astype(np.int16).tobytes())
     return buffer.getvalue()
 
 
 class ElevenLabsSpeechBackend:
     """Microphone backend using sounddevice + ElevenLabs Scribe STT.
 
-    It starts collecting after speech energy crosses the VAD threshold and
-    stops after sustained silence, so it does not require PyAudio.
+    VAD waits for speech energy, records until sustained silence, and then
+    sends the captured WAV to Scribe. No PyAudio dependency is required.
     """
 
     name = "elevenlabs"
 
-    def __init__(
-        self,
-        client: ElevenLabsClient | None = None,
-        *,
-        sample_rate: int = 16_000,
-        channels: int = 1,
-        block_ms: int = 30,
-        max_phrase_seconds: float = 12.0,
-        silence_seconds: float = 0.8,
-    ) -> None:
+    def __init__(self, client: ElevenLabsClient | None = None, *, sample_rate: int = 16_000, channels: int = 1, block_ms: int = 30, max_phrase_seconds: float = 12.0, silence_seconds: float = 0.8) -> None:
         self.client = client or ElevenLabsClient()
         self.sample_rate = sample_rate
         self.channels = channels
@@ -155,8 +131,6 @@ class ElevenLabsSpeechBackend:
             self._error = str(error)
 
     def configure_vad(self, energy_threshold: int = 300, pause_threshold: float = 0.8) -> None:
-        # Existing Webster config uses microphone energy units. Convert them
-        # conservatively to a normalized float RMS threshold.
         self._energy_threshold = max(0.005, min(0.08, float(energy_threshold) / 20000.0))
         self.silence_seconds = max(0.2, float(pause_threshold))
 
@@ -173,40 +147,34 @@ class ElevenLabsSpeechBackend:
             return None
 
         self._stop_event.clear()
-        blocks: deque[np.ndarray] = deque()
+        queue: deque[np.ndarray] = deque()
+        captured: list[np.ndarray] = []
         speech_started = False
         silence_blocks = 0
         start = time.monotonic()
         last_speech = start
         wait_limit = max(0.1, float(timeout))
-        phrase_limit = max(0.5, float(phrase_timeout))
+        phrase_limit = max(0.5, float(phrase_timeout), self.max_phrase_seconds)
         silence_block_count = max(1, int(self.silence_seconds * 1000 / 30))
 
         def callback(indata, frames, callback_time, status) -> None:
             if status:
                 self._error = str(status)
             with self._lock:
-                blocks.append(indata[:, 0].copy())
+                queue.append(indata[:, 0].copy())
 
         try:
-            with sd.InputStream(
-                samplerate=self.sample_rate,
-                channels=self.channels,
-                dtype="float32",
-                blocksize=self.block_size,
-                callback=callback,
-            ):
+            with sd.InputStream(samplerate=self.sample_rate, channels=self.channels, dtype="float32", blocksize=self.block_size, callback=callback):
                 self._listening = True
                 while not self._stop_event.is_set():
-                    if time.monotonic() - start >= wait_limit and not speech_started:
+                    now = time.monotonic()
+                    if not speech_started and now - start >= wait_limit:
                         break
-                    if speech_started and time.monotonic() - last_speech >= phrase_limit:
+                    if speech_started and now - last_speech >= phrase_limit:
                         break
 
-                    block = None
                     with self._lock:
-                        if blocks:
-                            block = blocks.popleft()
+                        block = queue.popleft() if queue else None
                     if block is None:
                         time.sleep(0.01)
                         continue
@@ -214,22 +182,23 @@ class ElevenLabsSpeechBackend:
                     rms = float(np.sqrt(np.mean(np.square(block)) + 1e-12))
                     if rms >= self._energy_threshold:
                         speech_started = True
-                        last_speech = time.monotonic()
+                        last_speech = now
                         silence_blocks = 0
                     elif speech_started:
                         silence_blocks += 1
                         if silence_blocks >= silence_block_count:
+                            captured.append(block)
                             break
 
                     if speech_started:
-                        blocks.appendleft(block) if False else None
+                        captured.append(block)
 
-                # The callback queue can contain the final blocks. Drain it.
                 with self._lock:
-                    captured = list(blocks)
-                if not speech_started or not captured:
-                    return None
+                    while queue:
+                        captured.append(queue.popleft())
 
+            if not speech_started or not captured:
+                return None
             audio = np.concatenate(captured).astype(np.float32)
             return self.client.transcribe(pcm16_wav(audio, self.sample_rate), language_code=None)
         except Exception as error:
