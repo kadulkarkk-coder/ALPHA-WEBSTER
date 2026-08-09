@@ -6,7 +6,7 @@ from core.voice.config import VoiceConfig
 from core.voice.engine import VoiceEngine
 
 class VoiceManager:
-    """Lifecycle, diagnostics and natural hands-free conversation controller."""
+    """Lifecycle, diagnostics and persistent hands-free conversation controller."""
     def __init__(self, engine: VoiceEngine | None = None, config: VoiceConfig | None = None) -> None:
         self.config=config or VoiceConfig(); self.engine=engine or VoiceEngine(config=self.config); self._initialized=False; self._running=False; self._processor: Callable[[str], str] | None=None; self._last_input=None; self._last_response=None; self._last_error=None; self._loop_thread=None; self._stop_event=Event()
     def initialize(self):
@@ -46,7 +46,11 @@ class VoiceManager:
         try: return self._process(text)
         except Exception as error: self._last_error=str(error); print(f"[VOICE] Error: {error}"); return None
     def _conversation_turn(self):
-        text=self.engine.listen_turn()
+        """Wait for one follow-up turn; silence ends follow-up mode, not voice mode."""
+        try:
+            text=self.engine.listen_turn()
+        except Exception as error:
+            self._last_error=str(error); return False
         if not text: return False
         try:
             self.engine._turns += 1
@@ -69,15 +73,21 @@ class VoiceManager:
         print("[VOICE] Hands-free voice mode active. Say 'Webster' to wake me.")
         while not self._stop_event.is_set():
             try:
+                # Always return to wake-word listening after a silent follow-up.
                 result=self.converse_once()
-                if result is not None:
-                    self.engine.begin_conversation()
-                    while not self._stop_event.is_set():
-                        if not self._conversation_turn():
-                            self.engine.end_conversation(); break
-                elif self._last_error: self._stop_event.wait(.25)
+                if result is None:
+                    self._stop_event.wait(0.05)
+                    continue
+                self.engine.begin_conversation()
+                while not self._stop_event.is_set():
+                    if self._conversation_turn():
+                        continue
+                    # No speech within the follow-up window: reset only the
+                    # conversation context and immediately resume wake-word mode.
+                    self.engine.end_conversation()
+                    break
             except Exception as error:
-                self._last_error=str(error); self._stop_event.wait(.25)
+                self._last_error=str(error); self._stop_event.wait(.1)
     def devices(self):
         if not self._initialized: self.initialize()
         return self.engine.devices()
