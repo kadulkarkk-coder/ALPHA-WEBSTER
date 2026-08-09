@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from app.runtime import Runtime
-
 from core.capability.browser.back import BackCapability
 from core.capability.browser.open_url import OpenUrlCapability
 from core.capability.browser.refresh import RefreshCapability
@@ -32,6 +31,7 @@ from core.ai.engine import AIEngine
 from core.ai.router import IntentRouter
 from core.ai.goal_builder import GoalBuilder
 from core.ai.response_builder import ResponseBuilder
+from core.commands.engine import CommandEngine
 from core.memory.manager import MemoryManager
 from core.conversation.manager import ConversationManager
 from core.plugins.manager import PluginManager
@@ -45,7 +45,7 @@ from core.file.manager import FileManager
 
 
 class Launcher:
-    """Construct, wire, initialize, and run every Webster subsystem."""
+    """Construct, wire, initialize, and run Webster's core subsystems."""
 
     def __init__(self) -> None:
         self._initialized = False
@@ -57,27 +57,18 @@ class Launcher:
         self.plugin_manager = PluginManager()
         self.messaging_manager = MessagingManager()
         self.memory_manager = MemoryManager(event_bus=self.event_bus)
-        self.conversation_manager = ConversationManager(
-            memory=self.memory_manager,
-            event_bus=self.event_bus,
-        )
+        self.conversation_manager = ConversationManager(memory=self.memory_manager, event_bus=self.event_bus)
 
         self.capability_registry = CapabilityRegistry()
         self.capability_manager = CapabilityManager(registry=self.capability_registry)
-        self.capability_engine = CapabilityEngine(
-            manager=self.capability_manager,
-            registry=self.capability_registry,
-            event_bus=self.event_bus,
-        )
+        self.capability_engine = CapabilityEngine(manager=self.capability_manager, registry=self.capability_registry, event_bus=self.event_bus)
 
-        self.plan_registry = self.capability_registry
         self.planning_manager = PlanningManager()
-        self._planner = Planner(registry=self.plan_registry)
-        self.validator = Validator(registry=self.plan_registry)
+        self._planner = Planner(registry=self.capability_registry)
+        self.validator = Validator(registry=self.capability_registry)
         self.executor = Executor(capability_engine=self.capability_engine)
         self.goal_analyzer = GoalAnalyzer()
-        self.task_decomposer = TaskDecomposer(registry=self.plan_registry)
-
+        self.task_decomposer = TaskDecomposer(registry=self.capability_registry)
         self.planning_engine = PlanningEngine(
             capability_engine=self.capability_engine,
             manager=self.planning_manager,
@@ -87,17 +78,25 @@ class Launcher:
             analyzer=self.goal_analyzer,
             decomposer=self.task_decomposer,
             event_bus=self.event_bus,
-            registry=self.plan_registry,
+            registry=self.capability_registry,
         )
 
         self.provider_manager = ProviderManager()
         self.gemini_provider = GeminiProvider()
         self.ollama_provider = OllamaProvider()
-        # Backwards-compatible alias for code that expects launcher.provider.
         self.provider = self.gemini_provider
         self.intent_router = IntentRouter()
         self.goal_builder = GoalBuilder()
         self.response_builder = ResponseBuilder()
+        self.command_engine = CommandEngine(
+            router=self.intent_router,
+            decomposer=self.task_decomposer,
+            planner=self._planner,
+            validator=self.validator,
+            executor=self.executor,
+            capability_engine=self.capability_engine,
+            response_builder=self.response_builder,
+        )
 
         self.ai_engine = AIEngine(
             provider_manager=self.provider_manager,
@@ -108,6 +107,7 @@ class Launcher:
             router=self.intent_router,
             goal_builder=self.goal_builder,
             response_builder=self.response_builder,
+            command_engine=self.command_engine,
         )
 
         self.voice_manager = VoiceManager()
@@ -129,7 +129,6 @@ class Launcher:
     def initialize(self) -> None:
         if self._initialized:
             return
-
         self._runtime.initialize()
         self.service_registry.initialize()
         self.provider_manager.initialize()
@@ -149,24 +148,10 @@ class Launcher:
         self.capability_engine.initialize()
         self.planning_engine.initialize()
         self.ai_engine.initialize()
-
         self.voice_manager.set_processor(self.ai_engine.chat)
 
-        self._runtime.services = self.service_registry
-        self._runtime.provider = self.provider_manager
-        self._runtime.memory = self.memory_manager
-        self._runtime.conversation = self.conversation_manager
-        self._runtime.plugins = self.plugin_manager
-        self._runtime.events = self.event_bus
-        self._runtime.messaging = self.messaging_manager
-        self._runtime.capability_engine = self.capability_engine
-        self._runtime.planning_engine = self.planning_engine
-        self._runtime.ai = self.ai_engine
-        self._runtime.voice = self.voice_manager
-        self._runtime.file_manager = self.file_manager
-
+        from app.application import Application
         if self._runtime.application is None:
-            from app.application import Application
             self._runtime.application = Application(runtime=self._runtime)
 
         self._initialized = True
@@ -178,6 +163,7 @@ class Launcher:
             "conversation_manager": self.conversation_manager,
             "capability_engine": self.capability_engine,
             "planning_engine": self.planning_engine,
+            "command_engine": self.command_engine,
             "ai_engine": self.ai_engine,
             "plugin_manager": self.plugin_manager,
             "event_bus": self.event_bus,
@@ -189,7 +175,6 @@ class Launcher:
             self.service_registry.register(name, service)
 
     def _register_providers(self) -> None:
-        # Gemini is primary. Ollama remains available as a local fallback.
         if not self.provider_manager.has(self.gemini_provider.name):
             self.provider_manager.register(self.gemini_provider)
         if not self.provider_manager.has(self.ollama_provider.name):
@@ -197,26 +182,16 @@ class Launcher:
         self.provider_manager.set_default(self.gemini_provider.name)
 
     def _register_capabilities(self) -> None:
-        self.capability_engine.register(OpenUrlCapability())
-        self.capability_engine.register(RefreshCapability())
-        self.capability_engine.register(BackCapability())
+        for capability in (OpenUrlCapability(), RefreshCapability(), BackCapability()):
+            self.capability_engine.register(capability)
 
-        filesystem = (
-            CreateFileCapability,
-            CreateFolderCapability,
-            DeleteFileCapability,
-            RenameFileCapability,
-            CopyFileCapability,
-            MoveFileCapability,
-            ReadFileCapability,
-            WriteFileCapability,
-            ListDirectoryCapability,
+        for capability_type in (
+            CreateFileCapability, CreateFolderCapability, DeleteFileCapability,
+            RenameFileCapability, CopyFileCapability, MoveFileCapability,
+            ReadFileCapability, WriteFileCapability, ListDirectoryCapability,
             SearchFilesCapability,
-        )
-        for capability_type in filesystem:
-            self.capability_engine.register(
-                capability_type(file_manager=self.file_manager)
-            )
+        ):
+            self.capability_engine.register(capability_type(file_manager=self.file_manager))
 
     def _register_workflows(self) -> None:
         pass
@@ -226,16 +201,12 @@ class Launcher:
             return
         if not self._initialized:
             self.initialize()
-
         self._runtime.start()
         self.voice_manager.start()
-
         application = self._runtime.application
         if application is not None and not application.running:
             application.start()
-
         self._running = True
-
         if self.voice_manager.config.enabled and self.voice_manager.config.listen_enabled:
             self.voice_manager.start_voice_loop()
 
@@ -255,11 +226,9 @@ class Launcher:
     def shutdown(self) -> None:
         if not self._running:
             return
-
         application = self._runtime.application
         if application is not None and application.running:
             application.shutdown()
-
         self.voice_manager.shutdown()
         self.file_manager.shutdown()
         self.ai_engine.shutdown()
@@ -294,6 +263,7 @@ class Launcher:
             "runtime": self._runtime.health(),
             "providers": self.provider_manager.health(),
             "planning": self.planning_engine.health(),
+            "commands": self.command_engine.health(),
             "capabilities": self.capability_engine.health(),
             "memory": self.memory_manager.health(),
             "conversation": self.conversation_manager.health(),
