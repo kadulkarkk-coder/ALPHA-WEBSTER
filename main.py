@@ -20,19 +20,20 @@ def main() -> None:
         print("=" * 60)
         print()
 
+        # Launcher.start() already starts the hands-free voice loop after
+        # wiring the AI processor. Do not start it a second time here: the
+        # second call would correctly return False because the loop is alive.
         launcher.start()
 
-        # Start hands-free voice mode after the complete runtime has been
-        # initialized and the AI processor has been connected.
-        voice_started = launcher.voice_manager.start_voice_loop()
-
         application = launcher.application
+        voice_health = launcher.voice_manager.health()
+        voice_started = voice_health["voice_loop_running"]
 
         print("Webster initialized successfully.")
         if voice_started:
             print("Voice mode: ACTIVE — say 'Webster' to wake me.")
         else:
-            print("Voice mode: unavailable — use 'health' for diagnostics.")
+            print("Voice mode: unavailable — use 'voice' for diagnostics.")
         print()
         print("WEBSTER CHAT MODE")
         print("Type 'help' for commands.")
@@ -72,8 +73,14 @@ def main() -> None:
                 print(f"  available: {health['input_available']}")
                 print(f"  listening: {health['listening']}")
                 print(f"  wake word: {health['wake_word']}")
+                print(f"  output:    {health['output_backend']}")
+                print(f"  speaker:   {health['output_available']}")
                 if health.get("input_error"):
-                    print(f"  error:     {health['input_error']}")
+                    print(f"  input err: {health['input_error']}")
+                if health.get("output_error"):
+                    print(f"  output err: {health['output_error']}")
+                if health.get("last_error"):
+                    print(f"  manager err: {health['last_error']}")
                 print()
                 continue
 
