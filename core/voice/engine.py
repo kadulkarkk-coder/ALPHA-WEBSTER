@@ -1,5 +1,4 @@
-"""Core voice pipeline for Webster Alpha."""
-
+"""Core voice conversation pipeline for Webster Alpha."""
 from __future__ import annotations
 
 import re
@@ -12,7 +11,7 @@ from core.voice.stt import SpeechToTextBackend
 
 
 class VoiceEngine:
-    """Coordinates local STT, wake-word filtering, TTS and barge-in."""
+    """Coordinates natural turn-taking, wake-word follow-up and barge-in."""
 
     _SENTENCE_RE = re.compile(r".+?(?:[.!?]+(?=\s|$)|$)", re.DOTALL)
 
@@ -25,6 +24,9 @@ class VoiceEngine:
         self._sentences_spoken = 0
         self._barge_stop = Event()
         self._barge_thread: Thread | None = None
+        self._conversation_active = False
+        self._turns = 0
+        self._last_interrupted = False
 
     def initialize(self) -> None:
         if self._initialized:
@@ -43,13 +45,24 @@ class VoiceEngine:
         self.listener.stop()
         self.speaker.stop()
         self._sentence_barge_ready = False
-        self._sentences_spoken = 0
+        self._conversation_active = False
         self.listener.set_speaker_active(False, False)
 
     def listen(self, ignore_wake_word: bool = False) -> str | None:
         if not self._initialized:
             self.initialize()
         return self.listener.listen(ignore_wake_word=ignore_wake_word)
+
+    def listen_turn(self) -> str | None:
+        """Listen naturally after Webster has already established a conversation.
+
+        The wake word is not required during the short active-conversation
+        window; after the window expires the normal listener requires wake-up
+        again. This makes follow-up questions feel conversational without
+        leaving Webster permanently attentive to unrelated speech.
+        """
+        self._conversation_active = True
+        return self.listen(ignore_wake_word=True)
 
     @classmethod
     def _split_sentences(cls, text: str) -> list[str]:
@@ -72,6 +85,7 @@ class VoiceEngine:
         def monitor() -> None:
             try:
                 if method(self._barge_stop):
+                    self._last_interrupted = True
                     self.speaker.stop()
             except Exception:
                 pass
@@ -88,12 +102,11 @@ class VoiceEngine:
         sentences = self._split_sentences(text)
         self._sentence_barge_ready = False
         self._sentences_spoken = 0
+        self._last_interrupted = False
         success = True
 
         try:
             for index, sentence in enumerate(sentences):
-                # Sentence one is always protected. Barge-in is armed only
-                # after Webster has completed at least one full sentence.
                 allow_barge = self.config.barge_in_enabled and index > 0 and self._sentence_barge_ready
                 self.listener.set_speaker_active(True, allow_barge)
                 if allow_barge:
@@ -104,6 +117,10 @@ class VoiceEngine:
                     break
 
                 self._stop_barge_monitor()
+                if self._last_interrupted:
+                    success = False
+                    break
+
                 self._sentences_spoken += 1
                 if self._sentences_spoken >= 1:
                     self._sentence_barge_ready = True
@@ -114,6 +131,23 @@ class VoiceEngine:
             self._sentence_barge_ready = False
             self.listener.set_speaker_active(False, False)
 
+    def begin_conversation(self) -> None:
+        self._conversation_active = True
+        self._turns = 0
+
+    def end_conversation(self) -> None:
+        self._conversation_active = False
+        self._turns = 0
+        self._sentence_barge_ready = False
+
+    @property
+    def conversation_active(self) -> bool:
+        return self._conversation_active
+
+    @property
+    def turns(self) -> int:
+        return self._turns
+
     @property
     def sentence_barge_ready(self) -> bool:
         return self._sentence_barge_ready
@@ -121,6 +155,10 @@ class VoiceEngine:
     @property
     def sentences_spoken(self) -> int:
         return self._sentences_spoken
+
+    @property
+    def last_interrupted(self) -> bool:
+        return self._last_interrupted
 
     def devices(self) -> list[dict]:
         return self.listener.devices()
@@ -134,4 +172,30 @@ class VoiceEngine:
         self._initialized = False
 
     def health(self) -> dict:
-        return {"initialized": self._initialized, "enabled": self.config.enabled, "listening": self.listener.listening, "speaking": self.speaker.speaking, "barge_in_enabled": self.config.barge_in_enabled, "sentence_barge_ready": self._sentence_barge_ready, "sentences_spoken": self._sentences_spoken, "wake_word_enabled": self.config.wake_word_enabled, "wake_word": self.config.wake_word, "wake_word_detected": self.listener.wake_word_detected, "last_heard": self.listener.last_heard, "vad_enabled": self.config.vad_enabled, "input_backend": self.listener.backend_name, "input_available": self.listener.available, "input_error": self.listener.error, "input_device": self.listener.device_name, "input_rms": self.listener.last_rms, "input_threshold": self.listener.last_threshold, "output_backend": self.speaker.__class__.__name__, "output_available": self.speaker.available, "output_error": self.speaker.error}
+        return {
+            "initialized": self._initialized,
+            "enabled": self.config.enabled,
+            "listening": self.listener.listening,
+            "speaking": self.speaker.speaking,
+            "conversation_active": self._conversation_active,
+            "turns": self._turns,
+            "barge_in_enabled": self.config.barge_in_enabled,
+            "sentence_barge_ready": self._sentence_barge_ready,
+            "sentences_spoken": self._sentences_spoken,
+            "last_interrupted": self._last_interrupted,
+            "wake_word_enabled": self.config.wake_word_enabled,
+            "wake_word": self.config.wake_word,
+            "wake_word_detected": self.listener.wake_word_detected,
+            "wake_word_score": self.listener.wake_word_score,
+            "last_heard": self.listener.last_heard,
+            "vad_enabled": self.config.vad_enabled,
+            "input_backend": self.listener.backend_name,
+            "input_available": self.listener.available,
+            "input_error": self.listener.error,
+            "input_device": self.listener.device_name,
+            "input_rms": self.listener.last_rms,
+            "input_threshold": self.listener.last_threshold,
+            "output_backend": self.speaker.__class__.__name__,
+            "output_available": self.speaker.available,
+            "output_error": self.speaker.error,
+        }
