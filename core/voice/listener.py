@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from core.voice.config import VoiceConfig
-from core.voice.stt import MicrophoneSpeechBackend, NullSpeechBackend, SpeechToTextBackend
+from core.voice.stt import ElevenLabsSpeechBackend, MicrophoneSpeechBackend, NullSpeechBackend, SpeechToTextBackend
 
 
 class VoiceListener:
@@ -11,11 +11,18 @@ class VoiceListener:
 
     def __init__(self, config: VoiceConfig | None = None, backend: SpeechToTextBackend | None = None) -> None:
         self.config = config or VoiceConfig()
-        self._backend = backend or MicrophoneSpeechBackend()
+        self._backend = backend or self._build_backend()
         self._initialized = False
         self._listening = False
         self._error: str | None = None
         self._wake_word_detected = False
+
+    def _build_backend(self) -> SpeechToTextBackend:
+        if self.config.input_backend == "elevenlabs":
+            return ElevenLabsSpeechBackend(self.config)
+        if self.config.input_backend == "speech_recognition":
+            return MicrophoneSpeechBackend()
+        return NullSpeechBackend()
 
     def initialize(self) -> None:
         if self._initialized:
@@ -74,8 +81,6 @@ class VoiceListener:
                 return None
 
             self._wake_word_detected = True
-            # Saying only the wake word activates Webster; the next listen
-            # cycle collects the actual command.
             return command if command else None
         except Exception as error:
             self._error = str(error)
