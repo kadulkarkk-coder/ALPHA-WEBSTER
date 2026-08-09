@@ -1,6 +1,5 @@
 """Core voice conversation pipeline for Webster Alpha."""
 from __future__ import annotations
-import re
 from core.voice.config import VoiceConfig
 from core.voice.listener import VoiceListener
 from core.voice.speaker import VoiceSpeaker
@@ -8,12 +7,11 @@ from core.voice.stt import SpeechToTextBackend
 from core.voice.diagnostics import VoiceDiagnostics
 
 class VoiceEngine:
-    """Coordinates wake-word listening, natural turns and diagnostics.
+    """Coordinates continuous voice turns and diagnostics.
 
-    Audio-only barge-in is intentionally disabled for now. Later it can be
-    connected to camera lip-motion detection + audio speech detection.
+    Audio-only barge-in is intentionally disabled for now. It will later be
+    gated by camera lip-motion detection + audio speech detection.
     """
-    _SENTENCE_RE = re.compile(r".+?(?:[.!?]+(?=\s|$)|$)", re.DOTALL)
     def __init__(self, listener=None, speaker=None, config=None, stt_backend: SpeechToTextBackend | None = None):
         self.config=config or VoiceConfig(); self.listener=listener or VoiceListener(config=self.config, backend=stt_backend); self.speaker=speaker or VoiceSpeaker(self.config); self.diagnostics=VoiceDiagnostics(); self._initialized=False; self._sentence_barge_ready=False; self._sentences_spoken=0; self._conversation_active=False; self._turns=0; self._last_interrupted=False
     def initialize(self):
@@ -31,20 +29,16 @@ class VoiceEngine:
         except Exception as exc: self.diagnostics.error(exc); return None
         finally: self.diagnostics.finish_stt()
     def listen_turn(self): self._conversation_active=True; return self.listen(ignore_wake_word=True)
-    @classmethod
-    def _split_sentences(cls,text): return [p.strip() for p in cls._SENTENCE_RE.findall(text) if p.strip()] or [text.strip()]
     def speak(self,text):
-        """Speak the complete response without audio-only interruption."""
+        """Speak the complete response in ONE TTS job; audio barge-in is disabled."""
         if not self._initialized: self.initialize()
         if not self.config.speak_enabled or not text.strip(): return False
-        self.diagnostics.start_turn(); sentences=self._split_sentences(text); self._sentence_barge_ready=False; self._sentences_spoken=0; self._last_interrupted=False
+        self.diagnostics.start_turn(); self._sentence_barge_ready=False; self._sentences_spoken=0; self._last_interrupted=False
         try:
-            # BARGE-IN DISABLED: do not monitor microphone while Webster speaks.
             self.listener.set_speaker_active(True,False)
-            for sentence in sentences:
-                self.diagnostics.start_tts(); ok=self.speaker.speak(sentence); self.diagnostics.finish_tts()
-                if not ok: return False
-                self._sentences_spoken+=1; self._sentence_barge_ready=self._sentences_spoken>=1
+            self.diagnostics.start_tts(); ok=self.speaker.speak(str(text).strip()); self.diagnostics.finish_tts()
+            if not ok: return False
+            self._sentences_spoken=max(1, sum(1 for ch in str(text) if ch in ".!?")); self._sentence_barge_ready=True
             return True
         except Exception as exc: self.diagnostics.error(exc); return False
         finally:
