@@ -29,10 +29,12 @@ def run_cli(launcher):
     print("\nWebster initialized successfully.\nCore command engine: ACTIVE\n\nWEBSTER CHAT MODE\nType 'help' for commands.\nType 'exit' or 'quit' to stop.\n")
     while True:
         try: command=input("webster> ").strip()
-        except (EOFError,KeyboardInterrupt): print("\nGoodbye."); return
+        except (EOFError,KeyboardInterrupt):
+            launcher.stop_voice(); print("\nGoodbye."); return
         if not command: continue
         lower=command.lower()
-        if lower in ("exit","quit"): print("Goodbye."); return
+        if lower in ("exit","quit"):
+            launcher.stop_voice(); print("Goodbye."); return
         if lower=="help":
             print("\nCommands\n--------\nhelp\nstatus\nhealth\ncapabilities\nvoice\nvoice diagnostics\nvoice devices\nvoice test\nrestart\nexit\n"); continue
         if lower=="capabilities":
