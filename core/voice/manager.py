@@ -1,4 +1,4 @@
-"""High-level voice manager for Webster."""
+"""High-level voice manager for Webster Alpha."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from core.voice.engine import VoiceEngine
 
 
 class VoiceManager:
-    """Public lifecycle and hands-free voice conversation API."""
+    """Lifecycle, diagnostics and hands-free conversation controller."""
 
     def __init__(self, engine: VoiceEngine | None = None, config: VoiceConfig | None = None) -> None:
         self.config = config or VoiceConfig()
@@ -29,6 +29,8 @@ class VoiceManager:
             return
         self.engine.initialize()
         self._initialized = True
+        if not self.engine.listener.available:
+            self._last_error = self.engine.listener.error or "No usable microphone/STT backend is available."
 
     def start(self) -> None:
         if not self._initialized:
@@ -45,16 +47,16 @@ class VoiceManager:
 
     def shutdown(self) -> None:
         self.stop_voice_loop()
-        if not self._initialized:
-            return
-        self.engine.shutdown()
-        self._initialized = False
+        if self._initialized:
+            self.engine.shutdown()
+            self._initialized = False
 
-    def listen(self) -> str | None:
+    def listen(self, ignore_wake_word: bool = False) -> str | None:
         if not self._initialized:
             self.initialize()
-        text = self.engine.listen()
-        self._last_input = text
+        text = self.engine.listen(ignore_wake_word=ignore_wake_word)
+        if text:
+            self._last_input = text
         return text
 
     def speak(self, text: str) -> bool:
@@ -71,23 +73,22 @@ class VoiceManager:
         if self._processor is None:
             self._last_error = "No voice conversation processor is configured."
             return None
+        if not self.engine.listener.available:
+            self._last_error = self.engine.listener.error or "Voice input is unavailable."
+            return None
 
         text = self.listen()
         if not text:
             return None
 
         try:
-            self._last_input = text
             print(f"\n[VOICE] You: {text}")
-
             response = str(self._processor(text)).strip()
             if not response:
                 self._last_error = "AI returned an empty response."
                 return None
-
             self._last_response = response
             print(f"[VOICE] Webster: {response}\n")
-
             if not self.speak(response):
                 self._last_error = self.engine.speaker.error or "Voice output failed."
             else:
@@ -99,14 +100,18 @@ class VoiceManager:
             return None
 
     def start_voice_loop(self) -> bool:
-        """Start hands-free mode: wait for speech, answer, then listen again."""
+        """Start the persistent local voice conversation loop."""
         if self._processor is None:
             self._last_error = "No voice conversation processor is configured."
             return False
         if self._loop_thread is not None and self._loop_thread.is_alive():
-            return False
+            return True
         if not self._initialized:
             self.initialize()
+        if not self.engine.listener.available:
+            self._last_error = self.engine.listener.error or "Voice input is unavailable."
+            return False
+
         self._stop_event.clear()
         self.start()
         self._loop_thread = Thread(target=self._voice_loop, name="WebsterVoiceLoop", daemon=True)
@@ -114,25 +119,31 @@ class VoiceManager:
         return True
 
     def stop_voice_loop(self) -> None:
-        """Stop hands-free mode and release active voice resources."""
         self._stop_event.set()
         self.engine.stop()
         self._running = False
         thread = self._loop_thread
         if thread is not None and thread.is_alive() and thread is not current_thread():
-            thread.join(timeout=1.0)
+            thread.join(timeout=1.5)
         self._loop_thread = None
 
     def _voice_loop(self) -> None:
-        """Wait for speech, process it, speak the answer, then wait again."""
         print("[VOICE] Hands-free voice mode active. Say 'Webster' to wake me.")
         while not self._stop_event.is_set():
             try:
-                self.converse_once()
+                result = self.converse_once()
+                if result is None and self._last_error:
+                    # Avoid a tight failure loop while still allowing the
+                    # listener to recover from transient microphone errors.
+                    self._stop_event.wait(0.25)
             except Exception as error:
                 self._last_error = str(error)
-                if self._stop_event.wait(0.2):
-                    break
+                self._stop_event.wait(0.25)
+
+    def devices(self) -> list[dict]:
+        if not self._initialized:
+            self.initialize()
+        return self.engine.devices()
 
     def health(self) -> dict:
         thread = self._loop_thread
@@ -149,4 +160,4 @@ class VoiceManager:
 
     @property
     def ready(self) -> bool:
-        return self._initialized and self.engine is not None
+        return self._initialized and self.engine.listener.available
