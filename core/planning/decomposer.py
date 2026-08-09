@@ -12,7 +12,13 @@ from .task import Task
 
 
 class TaskDecomposer:
-    """Convert an analyzed goal into executable tasks."""
+    """Convert analyzed goals into executable tasks.
+
+    The command engine performs the authoritative capability lookup.  Task
+    creation therefore must not perform a second registry lookup: doing so
+    created a false "not registered in the task registry" failure even when
+    the capability engine had already verified the capability.
+    """
 
     def __init__(self, registry: CapabilityRegistry | None = None) -> None:
         self._registry = registry
@@ -25,18 +31,16 @@ class TaskDecomposer:
         return self._registry is None or self._registry.exists(capability)
 
     def create_task(self, goal: Goal, capability: str) -> Task:
-        """Create one executable task for a known capability.
+        """Create one task for a capability already selected by the caller.
 
-        This is intentionally separate from natural-language analysis. The
-        caller may already have a verified capability from IntentRouter and
-        should not have to run a second classifier to produce a task.
+        Capability existence is deliberately not re-checked here.  The
+        authoritative check belongs to CapabilityEngine/CapabilityRegistry;
+        repeating it here can desynchronise command routing and task creation.
         """
         goal.validate()
         capability = capability.strip().lower()
         if not capability:
             raise ValueError("Capability name cannot be empty.")
-        if not self._available(capability):
-            raise ValueError(f"Capability '{capability}' is not registered in the task registry.")
 
         metadata: dict[str, object] = {"action": capability}
         if capability == "delete_file":
