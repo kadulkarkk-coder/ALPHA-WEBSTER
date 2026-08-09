@@ -10,6 +10,12 @@ from core.capability.browser.refresh import RefreshCapability
 from core.capability.file.create_folder import CreateFolderCapability
 from core.capability.file.delete import DeleteFileCapability
 from core.capability.file.rename import RenameFileCapability
+from core.capability.file.copy import CopyFileCapability
+from core.capability.file.move import MoveFileCapability
+from core.capability.file.read import ReadFileCapability
+from core.capability.file.write import WriteFileCapability
+from core.capability.file.list_directory import ListDirectoryCapability
+from core.capability.file.search import SearchFilesCapability
 from core.capability.registry import CapabilityRegistry
 from core.container.service_registry import ServiceRegistry
 from core.planning.analyzer import GoalAnalyzer
@@ -102,7 +108,6 @@ class Launcher:
         self.voice_manager = VoiceManager()
         self.file_manager = FileManager()
 
-        # Runtime is the central dependency graph.
         self._runtime.ai = self.ai_engine
         self._runtime.memory = self.memory_manager
         self._runtime.conversation = self.conversation_manager
@@ -114,6 +119,7 @@ class Launcher:
         self._runtime.services = self.service_registry
         self._runtime.provider = self.provider_manager
         self._runtime.voice = self.voice_manager
+        self._runtime.file_manager = self.file_manager
 
     def initialize(self) -> None:
         if self._initialized:
@@ -139,7 +145,6 @@ class Launcher:
         self.planning_engine.initialize()
         self.ai_engine.initialize()
 
-        # Voice uses the exact same AI conversation pipeline as text chat.
         self.voice_manager.set_processor(self.ai_engine.chat)
 
         self._runtime.services = self.service_registry
@@ -153,6 +158,7 @@ class Launcher:
         self._runtime.planning_engine = self.planning_engine
         self._runtime.ai = self.ai_engine
         self._runtime.voice = self.voice_manager
+        self._runtime.file_manager = self.file_manager
 
         if self._runtime.application is None:
             from app.application import Application
@@ -182,9 +188,36 @@ class Launcher:
         self.capability_engine.register(OpenUrlCapability())
         self.capability_engine.register(RefreshCapability())
         self.capability_engine.register(BackCapability())
-        self.capability_engine.register(CreateFolderCapability())
-        self.capability_engine.register(DeleteFileCapability())
-        self.capability_engine.register(RenameFileCapability())
+
+        # Every filesystem capability receives the ONE long-lived FileManager.
+        # This guarantees shared lifecycle state and one centralized safety layer.
+        self.capability_engine.register(
+            CreateFolderCapability(file_manager=self.file_manager)
+        )
+        self.capability_engine.register(
+            DeleteFileCapability(file_manager=self.file_manager)
+        )
+        self.capability_engine.register(
+            RenameFileCapability(file_manager=self.file_manager)
+        )
+        self.capability_engine.register(
+            CopyFileCapability(file_manager=self.file_manager)
+        )
+        self.capability_engine.register(
+            MoveFileCapability(file_manager=self.file_manager)
+        )
+        self.capability_engine.register(
+            ReadFileCapability(file_manager=self.file_manager)
+        )
+        self.capability_engine.register(
+            WriteFileCapability(file_manager=self.file_manager)
+        )
+        self.capability_engine.register(
+            ListDirectoryCapability(file_manager=self.file_manager)
+        )
+        self.capability_engine.register(
+            SearchFilesCapability(file_manager=self.file_manager)
+        )
 
     def _register_workflows(self) -> None:
         pass
@@ -204,8 +237,6 @@ class Launcher:
 
         self._running = True
 
-        # Hands-free mode is part of the running application. It waits for
-        # speech and remains idle while there is no utterance.
         if self.voice_manager.config.enabled and self.voice_manager.config.listen_enabled:
             self.voice_manager.start_voice_loop()
 
@@ -324,14 +355,3 @@ class Launcher:
     @property
     def application(self):
         return self._runtime.application
-
-    def __repr__(self) -> str:
-        return (
-            "Launcher("
-            f"running={self._running}, "
-            f"initialized={self._initialized}, "
-            f"services={self.service_count}, "
-            f"providers={self.provider_count}, "
-            f"capabilities={self.capability_count}"
-            ")"
-        )
