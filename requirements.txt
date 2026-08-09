@@ -1,0 +1,18 @@
+# Webster Alpha
+# Python 3.11+
+#
+# Ollama itself is installed separately and runs as a local service.
+# The Python client communicates with it through HTTP.
+
+# HTTP client used by OllamaProvider
+requests>=2.32.0,<3
+
+# Environment/configuration support
+python-dotenv>=1.0.1,<2
+
+# Voice output/input dependencies currently used by the voice subsystem
+pyttsx3>=2.98,<3
+SpeechRecognition>=3.10.4,<4
+
+# Microphone backend for SpeechRecognition on Windows
+PyAudio>=0.2.14,<1
