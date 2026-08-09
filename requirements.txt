@@ -1,8 +1,12 @@
 # Webster Alpha
-# Free/local voice stack. No ElevenLabs and no PyAudio.
-# Ollama itself is installed separately as a local service.
+# Gemini is the primary AI provider; Ollama remains an optional local fallback.
+# No ElevenLabs and no PyAudio.
 
-# Ollama HTTP communication
+# Google Gemini official Python SDK
+# Use this instead of the legacy google-generativeai package.
+google-genai>=1.0.0,<2
+
+# HTTP / local Ollama fallback
 requests>=2.32.0,<3
 
 # Environment/configuration
@@ -15,5 +19,5 @@ numpy>=2.0,<3
 # Local speech-to-text (Whisper)
 faster-whisper>=1.2.1,<2
 
-# Offline Windows/macOS/Linux text-to-speech
+# Offline text-to-speech
 pyttsx3>=2.99,<3
