@@ -7,6 +7,7 @@ from app.runtime import Runtime
 from core.capability.browser.back import BackCapability
 from core.capability.browser.open_url import OpenUrlCapability
 from core.capability.browser.refresh import RefreshCapability
+from core.capability.file.create import CreateFileCapability
 from core.capability.file.create_folder import CreateFolderCapability
 from core.capability.file.delete import DeleteFileCapability
 from core.capability.file.rename import RenameFileCapability
@@ -74,7 +75,7 @@ class Launcher:
         self.validator = Validator(registry=self.plan_registry)
         self.executor = Executor(capability_engine=self.capability_engine)
         self.goal_analyzer = GoalAnalyzer()
-        self.task_decomposer = TaskDecomposer()
+        self.task_decomposer = TaskDecomposer(registry=self.plan_registry)
 
         self.planning_engine = PlanningEngine(
             capability_engine=self.capability_engine,
@@ -167,17 +168,21 @@ class Launcher:
         self._initialized = True
 
     def _register_services(self) -> None:
-        self.service_registry.register("provider_manager", self.provider_manager)
-        self.service_registry.register("memory_manager", self.memory_manager)
-        self.service_registry.register("conversation_manager", self.conversation_manager)
-        self.service_registry.register("capability_engine", self.capability_engine)
-        self.service_registry.register("planning_engine", self.planning_engine)
-        self.service_registry.register("ai_engine", self.ai_engine)
-        self.service_registry.register("plugin_manager", self.plugin_manager)
-        self.service_registry.register("event_bus", self.event_bus)
-        self.service_registry.register("messaging_manager", self.messaging_manager)
-        self.service_registry.register("voice_manager", self.voice_manager)
-        self.service_registry.register("file_manager", self.file_manager)
+        services = {
+            "provider_manager": self.provider_manager,
+            "memory_manager": self.memory_manager,
+            "conversation_manager": self.conversation_manager,
+            "capability_engine": self.capability_engine,
+            "planning_engine": self.planning_engine,
+            "ai_engine": self.ai_engine,
+            "plugin_manager": self.plugin_manager,
+            "event_bus": self.event_bus,
+            "messaging_manager": self.messaging_manager,
+            "voice_manager": self.voice_manager,
+            "file_manager": self.file_manager,
+        }
+        for name, service in services.items():
+            self.service_registry.register(name, service)
 
     def _register_providers(self) -> None:
         if not self.provider_manager.has(self.provider.name):
@@ -189,35 +194,22 @@ class Launcher:
         self.capability_engine.register(RefreshCapability())
         self.capability_engine.register(BackCapability())
 
-        # Every filesystem capability receives the ONE long-lived FileManager.
-        # This guarantees shared lifecycle state and one centralized safety layer.
-        self.capability_engine.register(
-            CreateFolderCapability(file_manager=self.file_manager)
+        filesystem = (
+            CreateFileCapability,
+            CreateFolderCapability,
+            DeleteFileCapability,
+            RenameFileCapability,
+            CopyFileCapability,
+            MoveFileCapability,
+            ReadFileCapability,
+            WriteFileCapability,
+            ListDirectoryCapability,
+            SearchFilesCapability,
         )
-        self.capability_engine.register(
-            DeleteFileCapability(file_manager=self.file_manager)
-        )
-        self.capability_engine.register(
-            RenameFileCapability(file_manager=self.file_manager)
-        )
-        self.capability_engine.register(
-            CopyFileCapability(file_manager=self.file_manager)
-        )
-        self.capability_engine.register(
-            MoveFileCapability(file_manager=self.file_manager)
-        )
-        self.capability_engine.register(
-            ReadFileCapability(file_manager=self.file_manager)
-        )
-        self.capability_engine.register(
-            WriteFileCapability(file_manager=self.file_manager)
-        )
-        self.capability_engine.register(
-            ListDirectoryCapability(file_manager=self.file_manager)
-        )
-        self.capability_engine.register(
-            SearchFilesCapability(file_manager=self.file_manager)
-        )
+        for capability_type in filesystem:
+            self.capability_engine.register(
+                capability_type(file_manager=self.file_manager)
+            )
 
     def _register_workflows(self) -> None:
         pass
