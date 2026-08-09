@@ -61,6 +61,13 @@ class AIEngine:
     def execute(self, command: str) -> AIResponse:
         return self.process(command)
 
+    def _chat_with_provider(self, message: str) -> AIResponse:
+        request = AIRequest(
+            prompt=message,
+            context=self.conversation_manager.context,
+        )
+        return self.provider_manager.generate(request)
+
     def process(self, message: str) -> AIResponse:
         """Process conversational requests and validated executable goals."""
         if not self._initialized:
@@ -89,11 +96,12 @@ class AIEngine:
         intent = self.router.route(message)
 
         if intent.is_chat or intent.is_question:
-            request = AIRequest(
-                prompt=message,
-                context=self.conversation_manager.context,
-            )
-            response = self.provider_manager.generate(request)
+            response = self._chat_with_provider(message)
+        elif intent.is_action and intent.action is None:
+            # A generic action without a known executable capability is not a
+            # valid plan. Keep it conversational instead of creating an empty
+            # plan that will fail strict validation.
+            response = self._chat_with_provider(message)
         else:
             # Destructive filesystem operations require an explicit second
             # user turn. This prevents a natural-language misclassification
