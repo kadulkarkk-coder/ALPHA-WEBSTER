@@ -1,23 +1,14 @@
-# Webster Alpha
+# Webster Alpha voice/core dependencies
 # Gemini is the primary AI provider; Ollama remains an optional local fallback.
-# No ElevenLabs and no PyAudio.
 
-# Google Gemini official Python SDK
-# Use this instead of the legacy google-generativeai package.
 google-genai>=1.0.0,<2
-
-# HTTP / local Ollama fallback
 requests>=2.32.0,<3
-
-# Environment/configuration
 python-dotenv>=1.0.1,<2
 
-# Local microphone capture + VAD
+# Voice input: PyAudio is the preferred microphone transport.
+# sounddevice remains available as a fallback backend.
+PyAudio>=0.2.14,<0.3
 sounddevice>=0.5.5,<1
 numpy>=2.0,<3
-
-# Local speech-to-text (Whisper)
 faster-whisper>=1.2.1,<2
-
-# Offline text-to-speech
 pyttsx3>=2.99,<3
