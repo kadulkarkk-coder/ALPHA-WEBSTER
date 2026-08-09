@@ -1,7 +1,7 @@
 """Webster Alpha command-line entry point.
 
-The UI layer is intentionally disabled while the core platform is stabilized.
-Run ``python main.py`` for the terminal interface and diagnostics.
+Part 1 is core-first: the terminal interface is the diagnostic surface.
+No UI is imported here.
 """
 
 from __future__ import annotations
@@ -19,14 +19,8 @@ def _print_voice_status(launcher: Launcher) -> None:
 
 def run_cli(launcher: Launcher) -> None:
     application = launcher.application
-    voice_health = launcher.voice_manager.health()
-
     print("\nWebster initialized successfully.")
-    print(
-        "Voice mode: ACTIVE"
-        if voice_health.get("voice_loop_running")
-        else "Voice mode: unavailable"
-    )
+    print("Core command engine: ACTIVE")
     print("\nWEBSTER CHAT MODE")
     print("Type 'help' for commands.")
     print("Type 'exit' or 'quit' to stop.\n")
@@ -37,12 +31,10 @@ def run_cli(launcher: Launcher) -> None:
         except (EOFError, KeyboardInterrupt):
             print("\nGoodbye.")
             return
-
         if not command:
             continue
 
         lower = command.lower()
-
         if lower in ("exit", "quit"):
             print("Goodbye.")
             return
@@ -54,12 +46,27 @@ def run_cli(launcher: Launcher) -> None:
                 "help\n"
                 "status\n"
                 "health\n"
+                "capabilities\n"
                 "voice\n"
                 "voice devices\n"
                 "voice test\n"
                 "restart\n"
-                "exit\n"
+                "exit\n\n"
+                "Examples\n"
+                "--------\n"
+                "open google.com\n"
+                "list files\n"
+                "create folder called Test\n"
+                "create file called test.txt\n"
+                "read file test.txt\n"
             )
+            continue
+
+        if lower == "capabilities":
+            print("\nRegistered capabilities:")
+            for name in launcher.capability_engine.names():
+                print(f"  - {name}")
+            print()
             continue
 
         if lower == "voice":
@@ -74,10 +81,7 @@ def run_cli(launcher: Launcher) -> None:
                     continue
                 print("\nMicrophone devices:")
                 for device in devices:
-                    print(
-                        f"[{device['index']}] {device['name']} "
-                        f"(inputs={device['inputs']}, rate={device['samplerate']})"
-                    )
+                    print(f"[{device['index']}] {device['name']} (inputs={device['inputs']}, rate={device['samplerate']})")
                 print()
             except Exception as exc:
                 print(f"Voice device error: {exc}")
@@ -114,7 +118,7 @@ def run_cli(launcher: Launcher) -> None:
 
         if lower == "health":
             try:
-                print(application.health())
+                print(launcher.health())
             except Exception as exc:
                 print(f"Health error: {exc}")
             continue
