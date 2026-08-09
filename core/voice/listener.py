@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from core.voice.config import VoiceConfig
-from core.voice.stt import ElevenLabsSpeechBackend, MicrophoneSpeechBackend, NullSpeechBackend, SpeechToTextBackend
+from core.voice.stt import FasterWhisperSpeechBackend, NullSpeechBackend, SpeechToTextBackend
 
 
 class VoiceListener:
-    """Coordinates microphone/STT backends and wake-word filtering."""
+    """Coordinates local microphone capture, VAD and wake-word filtering."""
 
     def __init__(self, config: VoiceConfig | None = None, backend: SpeechToTextBackend | None = None) -> None:
         self.config = config or VoiceConfig()
@@ -18,10 +18,8 @@ class VoiceListener:
         self._wake_word_detected = False
 
     def _build_backend(self) -> SpeechToTextBackend:
-        if self.config.input_backend == "elevenlabs":
-            return ElevenLabsSpeechBackend(self.config)
-        if self.config.input_backend == "speech_recognition":
-            return MicrophoneSpeechBackend()
+        if self.config.input_backend == "faster_whisper":
+            return FasterWhisperSpeechBackend(self.config)
         return NullSpeechBackend()
 
     def initialize(self) -> None:
@@ -32,8 +30,9 @@ class VoiceListener:
             self._backend = NullSpeechBackend()
         try:
             self._backend.initialize()
-            if hasattr(self._backend, "configure_vad") and self.config.vad_enabled:
-                self._backend.configure_vad(self.config.vad_energy_threshold, self.config.vad_pause_threshold)
+            configure = getattr(self._backend, "configure_vad", None)
+            if callable(configure) and self.config.vad_enabled:
+                configure(self.config.vad_energy_threshold, self.config.vad_pause_threshold)
         except Exception as error:
             self._error = str(error)
         self._initialized = True
@@ -42,7 +41,7 @@ class VoiceListener:
         if not self._initialized:
             self.initialize()
         if self.config.enabled and self.config.listen_enabled:
-            self._listening = True
+            self._listening = False
 
     def stop(self) -> None:
         try:
@@ -53,7 +52,7 @@ class VoiceListener:
             self._listening = False
 
     def listen(self, ignore_wake_word: bool = False) -> str | None:
-        """Wait for voice activity and return a command when accepted."""
+        """Wait for voice activity, record until silence, then transcribe locally."""
         if not self._initialized:
             self.initialize()
         if not self.config.enabled or not self.config.listen_enabled or not self._backend.available:
@@ -65,7 +64,10 @@ class VoiceListener:
             if self.config.wake_word_enabled and not ignore_wake_word:
                 timeout = self.config.wake_word_timeout
 
-            text = self._backend.listen(timeout=timeout, phrase_timeout=self.config.phrase_timeout)
+            text = self._backend.listen(
+                timeout=timeout,
+                phrase_timeout=self.config.phrase_timeout,
+            )
             if not text:
                 self._wake_word_detected = False
                 return None
@@ -81,12 +83,23 @@ class VoiceListener:
                 return None
 
             self._wake_word_detected = True
-            return command if command else None
+            # Saying only "Webster" activates the assistant; it then listens
+            # again for the actual command.
+            if not command:
+                command = self._listen_after_wake()
+            return command
         except Exception as error:
             self._error = str(error)
             return None
         finally:
             self._listening = False
+
+    def _listen_after_wake(self) -> str | None:
+        text = self._backend.listen(
+            timeout=self.config.input_timeout,
+            phrase_timeout=self.config.phrase_timeout,
+        )
+        return text.strip() if text else None
 
     def _extract_wake_command(self, text: str) -> str | None:
         normalized = " ".join(text.lower().split())
@@ -118,7 +131,7 @@ class VoiceListener:
 
     @property
     def listening(self) -> bool:
-        return self._listening
+        return self._listening or bool(getattr(self._backend, "listening", False))
 
     @property
     def available(self) -> bool:
