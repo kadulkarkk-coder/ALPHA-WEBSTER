@@ -6,7 +6,7 @@ from core.voice.config import VoiceConfig
 from core.voice.engine import VoiceEngine
 
 class VoiceManager:
-    """Lifecycle, diagnostics and persistent hands-free conversation controller."""
+    """Lifecycle and persistent hands-free conversation controller."""
     def __init__(self, engine: VoiceEngine | None = None, config: VoiceConfig | None = None) -> None:
         self.config=config or VoiceConfig(); self.engine=engine or VoiceEngine(config=self.config); self._initialized=False; self._running=False; self._processor: Callable[[str], str] | None=None; self._last_input=None; self._last_response=None; self._last_error=None; self._loop_thread=None; self._stop_event=Event()
     def initialize(self):
@@ -37,27 +37,10 @@ class VoiceManager:
         self._last_response=response; print(f"[VOICE] Webster: {response}\n")
         if not self.speak(response): raise RuntimeError(self.engine.speaker.error or "Voice output failed.")
         self._last_error=None; return response
-    def converse_once(self):
-        if not self._initialized: self.initialize()
-        if self._processor is None: self._last_error="No voice conversation processor is configured."; return None
-        if not self.engine.listener.available: self._last_error=self.engine.listener.error or "Voice input is unavailable."; return None
-        text=self.listen()
-        if not text: return None
-        try: return self._process(text)
-        except Exception as error: self._last_error=str(error); print(f"[VOICE] Error: {error}"); return None
-    def _conversation_turn(self):
-        """Wait for one follow-up turn; silence ends follow-up mode, not voice mode."""
-        try:
-            text=self.engine.listen_turn()
-        except Exception as error:
-            self._last_error=str(error); return False
-        if not text: return False
-        try:
-            self.engine._turns += 1
-            self._process(text)
-            return True
-        except Exception as error:
-            self._last_error=str(error); print(f"[VOICE] Error: {error}"); return False
+    def _listen_wake(self):
+        return self.engine.listen(ignore_wake_word=False)
+    def _listen_followup(self):
+        return self.engine.listen(ignore_wake_word=True)
     def start_voice_loop(self):
         if self._processor is None: self._last_error="No voice conversation processor is configured."; return False
         if self._loop_thread is not None and self._loop_thread.is_alive(): return True
@@ -73,21 +56,42 @@ class VoiceManager:
         print("[VOICE] Hands-free voice mode active. Say 'Webster' to wake me.")
         while not self._stop_event.is_set():
             try:
-                # Always return to wake-word listening after a silent follow-up.
-                result=self.converse_once()
-                if result is None:
-                    self._stop_event.wait(0.05)
-                    continue
-                self.engine.begin_conversation()
+                # PHASE 2: wake-word listening is persistent. A timeout or
+                # silence never stops this thread.
+                text=self._listen_wake()
+                if self._stop_event.is_set(): break
+                if not text: continue
+                try:
+                    self.engine.begin_conversation(); self.engine._turns += 1
+                    self._process(text)
+                except Exception as error:
+                    self._last_error=str(error); print(f"[VOICE] Error: {error}")
+                    self.engine.end_conversation(); continue
+
+                # Follow-up mode accepts multiple turns without requiring the
+                # wake word again. Silence ends only this conversation.
                 while not self._stop_event.is_set():
-                    if self._conversation_turn():
-                        continue
-                    # No speech within the follow-up window: reset only the
-                    # conversation context and immediately resume wake-word mode.
-                    self.engine.end_conversation()
-                    break
+                    follow=self._listen_followup()
+                    if self._stop_event.is_set(): break
+                    if not follow:
+                        self.engine.end_conversation()
+                        break
+                    try:
+                        self.engine._turns += 1
+                        self._process(follow)
+                    except Exception as error:
+                        self._last_error=str(error); print(f"[VOICE] Error: {error}")
+                        self.engine.end_conversation(); break
             except Exception as error:
-                self._last_error=str(error); self._stop_event.wait(.1)
+                self._last_error=str(error); print(f"[VOICE] Voice loop recovered: {error}")
+                if not self._stop_event.wait(0.15): continue
+    def converse_once(self):
+        if not self._initialized: self.initialize()
+        if self._processor is None: self._last_error="No voice conversation processor is configured."; return None
+        text=self._listen_wake()
+        if not text: return None
+        try: return self._process(text)
+        except Exception as error: self._last_error=str(error); print(f"[VOICE] Error: {error}"); return None
     def devices(self):
         if not self._initialized: self.initialize()
         return self.engine.devices()
