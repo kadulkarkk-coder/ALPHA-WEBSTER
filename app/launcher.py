@@ -37,6 +37,7 @@ from core.conversation.manager import ConversationManager
 from core.plugins.manager import PluginManager
 from core.events.event_bus import EventBus
 from core.messaging.manager import MessagingManager
+from core.provider.gemini import GeminiProvider
 from core.provider.ollama import OllamaProvider
 from core.provider.manager import ProviderManager
 from core.voice.manager import VoiceManager
@@ -90,7 +91,10 @@ class Launcher:
         )
 
         self.provider_manager = ProviderManager()
-        self.provider = OllamaProvider()
+        self.gemini_provider = GeminiProvider()
+        self.ollama_provider = OllamaProvider()
+        # Backwards-compatible alias for code that expects launcher.provider.
+        self.provider = self.gemini_provider
         self.intent_router = IntentRouter()
         self.goal_builder = GoalBuilder()
         self.response_builder = ResponseBuilder()
@@ -185,9 +189,12 @@ class Launcher:
             self.service_registry.register(name, service)
 
     def _register_providers(self) -> None:
-        if not self.provider_manager.has(self.provider.name):
-            self.provider_manager.register(self.provider)
-        self.provider_manager.set_default(self.provider.name)
+        # Gemini is primary. Ollama remains available as a local fallback.
+        if not self.provider_manager.has(self.gemini_provider.name):
+            self.provider_manager.register(self.gemini_provider)
+        if not self.provider_manager.has(self.ollama_provider.name):
+            self.provider_manager.register(self.ollama_provider)
+        self.provider_manager.set_default(self.gemini_provider.name)
 
     def _register_capabilities(self) -> None:
         self.capability_engine.register(OpenUrlCapability())
