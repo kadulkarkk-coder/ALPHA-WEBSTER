@@ -161,7 +161,17 @@ class MainWindow(tk.Tk):
             x = c + 135 * math.cos(math.radians(angle))
             y = c + 135 * math.sin(math.radians(angle))
             overlay.create_line(c, c, x, y, fill=theme.BLUE_DARK, width=1)
-        overlay.lower()
+        # Canvas.lower() without an argument invokes the Canvas item API and
+        # raises TclError because it requires a tag/id.  We want the canvas
+        # widget itself behind the chat widget, so use the Tk widget stacking
+        # API with an explicit sibling.
+        try:
+            overlay.lower(self.chat)
+        except tk.TclError:
+            # If the chat widget implementation does not participate in the
+            # same stacking context, leaving the decorative canvas on top is
+            # preferable to preventing the application from starting.
+            pass
 
     def _close(self):
         self.destroy()
