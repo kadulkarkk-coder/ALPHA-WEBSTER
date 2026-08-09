@@ -21,8 +21,7 @@ def main() -> None:
         print()
 
         # Launcher.start() already starts the hands-free voice loop after
-        # wiring the AI processor. Do not start it a second time here: the
-        # second call would correctly return False because the loop is alive.
+        # wiring the AI processor. Do not start it a second time here.
         launcher.start()
 
         application = launcher.application
@@ -68,19 +67,20 @@ def main() -> None:
                 health = launcher.voice_manager.health()
                 print()
                 print("Voice status:")
-                print(f"  loop:      {health['voice_loop_running']}")
-                print(f"  input:     {health['input_backend']}")
-                print(f"  available: {health['input_available']}")
-                print(f"  listening: {health['listening']}")
-                print(f"  wake word: {health['wake_word']}")
-                print(f"  output:    {health['output_backend']}")
-                print(f"  speaker:   {health['output_available']}")
+                print(f"  loop:       {health['voice_loop_running']}")
+                print(f"  input:      {health['input_backend']}")
+                print(f"  available:  {health['input_available']}")
+                print(f"  listening:  {health['listening']}")
+                print(f"  wake word:  {health['wake_word']}")
+                print(f"  last heard: {health.get('last_heard') or '<nothing transcribed yet>'}")
+                print(f"  output:     {health['output_backend']}")
+                print(f"  speaker:    {health['output_available']}")
                 if health.get("input_error"):
-                    print(f"  input err: {health['input_error']}")
+                    print(f"  input err:  {health['input_error']}")
                 if health.get("output_error"):
                     print(f"  output err: {health['output_error']}")
                 if health.get("last_error"):
-                    print(f"  manager err: {health['last_error']}")
+                    print(f"  manager err:{health['last_error']}")
                 print()
                 continue
 
