@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from difflib import SequenceMatcher
+
 from core.voice.config import VoiceConfig
 from core.voice.stt import FasterWhisperSpeechBackend, NullSpeechBackend, SpeechToTextBackend
 
@@ -16,6 +18,7 @@ class VoiceListener:
         self._listening = False
         self._error: str | None = None
         self._wake_word_detected = False
+        self._last_heard: str | None = None
 
     def _build_backend(self) -> SpeechToTextBackend:
         if self.config.input_backend == "faster_whisper":
@@ -73,6 +76,8 @@ class VoiceListener:
                 return None
 
             text = text.strip()
+            self._last_heard = text
+
             if ignore_wake_word or not self.config.wake_word_enabled:
                 self._wake_word_detected = True
                 return text
@@ -99,16 +104,31 @@ class VoiceListener:
             timeout=self.config.input_timeout,
             phrase_timeout=self.config.phrase_timeout,
         )
-        return text.strip() if text else None
+        if text:
+            self._last_heard = text.strip()
+            return text.strip()
+        return None
 
     def _extract_wake_command(self, text: str) -> str | None:
         normalized = " ".join(text.lower().split())
         wake = self.config.wake_word
         if normalized == wake:
             return ""
+
         prefix = wake + " "
         if normalized.startswith(prefix):
             return text[len(wake):].strip()
+
+        # Whisper can slightly misrecognize a proper-name wake word. Accept a
+        # close match only for the first word, keeping the rest as the command.
+        words = normalized.split(maxsplit=1)
+        if words:
+            similarity = SequenceMatcher(None, words[0], wake).ratio()
+            if similarity >= 0.72:
+                if len(words) == 1:
+                    return ""
+                return text.split(maxsplit=1)[1].strip()
+
         return None
 
     def set_speaker_active(self, active: bool, allow_barge_in: bool = False) -> None:
@@ -144,6 +164,10 @@ class VoiceListener:
     @property
     def wake_word_detected(self) -> bool:
         return self._wake_word_detected
+
+    @property
+    def last_heard(self) -> str | None:
+        return self._last_heard
 
     @property
     def error(self) -> str | None:
