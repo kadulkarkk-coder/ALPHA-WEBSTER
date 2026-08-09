@@ -38,7 +38,7 @@ class TaskDecomposer:
             if not self._available(capability):
                 continue
             arguments = self._infer_arguments(text, capability)
-            metadata = {}
+            metadata: dict[str, object] = {}
             if capability == "delete_file":
                 metadata["requires_confirmation"] = True
             tasks.append(
@@ -77,7 +77,9 @@ class TaskDecomposer:
 
         if capability in {"create_folder", "create_file"}:
             target = self._quoted_or_tail(text, ("called", "named", "folder", "file"))
-            return {"path": target or "NewFolder" if capability == "create_folder" else "new_file.txt"}
+            if capability == "create_folder":
+                return {"path": target or "NewFolder"}
+            return {"path": target or "new_file.txt"}
 
         if capability == "write_file":
             path = self._quoted_or_tail(text, ("file", "called", "named")) or "output.txt"
@@ -97,7 +99,12 @@ class TaskDecomposer:
 
         if capability == "delete_file":
             target = self._quoted_or_tail(text, ("file", "folder", "called", "named")) or text
-            return {"path": target, "require_confirmation": True, "confirmed": False}
+            confirmed = "confirmed" in lower or "yes, delete" in lower
+            return {
+                "path": target,
+                "require_confirmation": True,
+                "confirmed": confirmed,
+            }
 
         if capability == "list_directory":
             path = self._quoted_or_tail(text, ("in", "inside", "folder", "directory")) or "."
@@ -122,7 +129,11 @@ class TaskDecomposer:
         return {}
 
     def _extract_from_to(self, text: str) -> tuple[str | None, str | None]:
-        match = re.search(r"(?:from\s+)?[\"']?(.+?)[\"']?\s+(?:to|into)\s+[\"']?(.+?)[\"']?$", text, re.I)
+        match = re.search(
+            r"(?:from\s+)?[\"']?(.+?)[\"']?\s+(?:to|into)\s+[\"']?(.+?)[\"']?$",
+            text,
+            re.I,
+        )
         if match:
             return match.group(1).strip(" .\"'"), match.group(2).strip(" .\"'")
         return None, None
@@ -151,10 +162,23 @@ class TaskDecomposer:
         return None
 
     def _search_pattern(self, text: str) -> str:
-        match = re.search(r"\b(?:python|pdf|text|word|image|video|audio)\b", text, re.I)
+        match = re.search(
+            r"\b(?:python|pdf|text|word|image|video|audio)\b",
+            text,
+            re.I,
+        )
         if match:
             token = match.group(0).lower()
-            return {"python": "*.py", "pdf": "*.pdf", "text": "*.txt", "word": "*.docx", "image": "*.png", "video": "*.mp4", "audio": "*.mp3"}.get(token, "*")
+            patterns = {
+                "python": "*.py",
+                "pdf": "*.pdf",
+                "text": "*.txt",
+                "word": "*.docx",
+                "image": "*.png",
+                "video": "*.mp4",
+                "audio": "*.mp3",
+            }
+            return patterns.get(token, "*")
         quoted = re.search(r"[\"']([^\"']+)[\"']", text)
         if quoted:
             return quoted.group(1)
