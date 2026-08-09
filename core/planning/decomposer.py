@@ -24,6 +24,31 @@ class TaskDecomposer:
     def _available(self, capability: str) -> bool:
         return self._registry is None or self._registry.exists(capability)
 
+    def create_task(self, goal: Goal, capability: str) -> Task:
+        """Create one executable task for a known capability.
+
+        This is intentionally separate from natural-language analysis. The
+        caller may already have a verified capability from IntentRouter and
+        should not have to run a second classifier to produce a task.
+        """
+        goal.validate()
+        capability = capability.strip().lower()
+        if not capability:
+            raise ValueError("Capability name cannot be empty.")
+        if not self._available(capability):
+            raise ValueError(f"Capability '{capability}' is not registered in the task registry.")
+
+        metadata: dict[str, object] = {"action": capability}
+        if capability == "delete_file":
+            metadata["requires_confirmation"] = True
+
+        return Task(
+            description=self._describe_task(goal.objective, capability),
+            capability=capability,
+            arguments=self._infer_arguments(goal.objective.strip(), capability),
+            metadata=metadata,
+        )
+
     def decompose(self, goal: Goal, analysis: GoalAnalysis | None = None) -> List[Task]:
         goal.validate()
         if analysis is None:
@@ -34,16 +59,7 @@ class TaskDecomposer:
         for capability in analysis.required_capabilities:
             if not self._available(capability):
                 continue
-            arguments = self._infer_arguments(goal.objective.strip(), capability)
-            metadata: dict[str, object] = {"action": capability}
-            if capability == "delete_file":
-                metadata["requires_confirmation"] = True
-            tasks.append(Task(
-                description=self._describe_task(goal.objective, capability),
-                capability=capability,
-                arguments=arguments,
-                metadata=metadata,
-            ))
+            tasks.append(self.create_task(goal, capability))
         return tasks
 
     def _describe_task(self, objective: str, capability: str) -> str:
@@ -97,7 +113,6 @@ class TaskDecomposer:
             return {"path": ".", "pattern": self._search_pattern(text), "recursive": True, "files_only": True}
 
         if capability == "open_url":
-            # Accept bare domains, www domains, and explicit URLs.
             match = re.search(r"(?:(?:https?://)|(?:www\.))[^\s]+", text, re.I)
             if match:
                 url = match.group(0).rstrip(".,!?)]}")
