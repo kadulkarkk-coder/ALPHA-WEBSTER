@@ -10,27 +10,22 @@ from . import theme
 
 class WebButton(tk.Button):
     def __init__(self, master, text, command=None, accent=False, **kwargs):
-        super().__init__(
-            master,
-            text=text,
-            command=command,
-            bg=theme.RED if accent else theme.PANEL_2,
-            fg=theme.WHITE,
-            activebackground=theme.RED_DARK if accent else theme.BLUE_DARK,
-            activeforeground=theme.WHITE,
-            relief="flat",
-            bd=0,
-            cursor="hand2",
-            font=(theme.FONT, 10, "bold"),
-            padx=14,
-            pady=10,
-            **kwargs,
-        )
+        kwargs.setdefault("bg", theme.RED if accent else theme.PANEL_2)
+        kwargs.setdefault("fg", theme.WHITE)
+        kwargs.setdefault("activebackground", theme.RED_DARK if accent else theme.BLUE_DARK)
+        kwargs.setdefault("activeforeground", theme.WHITE)
+        kwargs.setdefault("relief", "flat")
+        kwargs.setdefault("bd", 0)
+        kwargs.setdefault("cursor", "hand2")
+        kwargs.setdefault("font", (theme.FONT, 10, "bold"))
+        kwargs.setdefault("padx", 14)
+        kwargs.setdefault("pady", 10)
+        super().__init__(master, text=text, command=command, **kwargs)
 
 
 class StatusDot(tk.Canvas):
     def __init__(self, master, size=12, **kwargs):
-        super().__init__(master, width=size, height=size, bg=theme.BG, highlightthickness=0, **kwargs)
+        super().__init__(master, width=size, height=size, bg=theme.PANEL, highlightthickness=0, **kwargs)
         self.size = size
         self.dot = self.create_oval(2, 2, size - 2, size - 2, fill=theme.MUTED, outline="")
 
@@ -42,25 +37,12 @@ class ChatBubble(tk.Frame):
     def __init__(self, master, speaker, text, user=False):
         super().__init__(master, bg=theme.BG)
         bubble_color = theme.RED_DARK if user else theme.PANEL_2
-        label_color = theme.WHITE
-        tk.Label(
-            self,
-            text=speaker.upper(),
-            bg=theme.BG,
-            fg=theme.RED if user else theme.BLUE,
-            font=(theme.FONT, 8, "bold"),
-        ).pack(anchor="e" if user else "w", padx=10)
-        tk.Label(
-            self,
-            text=text,
-            bg=bubble_color,
-            fg=label_color,
-            justify="left",
-            wraplength=680,
-            padx=14,
-            pady=10,
-            font=(theme.FONT, 10),
-        ).pack(anchor="e" if user else "w", padx=8, pady=(2, 10))
+        tk.Label(self, text=speaker.upper(), bg=theme.BG,
+                 fg=theme.RED if user else theme.BLUE,
+                 font=(theme.FONT, 8, "bold")).pack(anchor="e" if user else "w", padx=10)
+        tk.Label(self, text=text, bg=bubble_color, fg=theme.WHITE,
+                 justify="left", wraplength=680, padx=14, pady=10,
+                 font=(theme.FONT, 10)).pack(anchor="e" if user else "w", padx=8, pady=(2, 10))
 
 
 class ScrollableChat(tk.Frame):
