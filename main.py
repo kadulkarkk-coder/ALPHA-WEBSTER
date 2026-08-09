@@ -1,16 +1,35 @@
-"""
-Webster Alpha
-
-Main Entry Point
-"""
+"""Webster Alpha - Main Entry Point."""
 
 from __future__ import annotations
 
 from app.launcher import Launcher
 
 
+def _print_voice_status(launcher: Launcher) -> None:
+    health = launcher.voice_manager.health()
+    print()
+    print("Voice status:")
+    print(f"  loop:       {health['voice_loop_running']}")
+    print(f"  input:      {health['input_backend']}")
+    print(f"  available:  {health['input_available']}")
+    print(f"  device:     {health.get('input_device') or '<default>''}")
+    print(f"  listening:  {health['listening']}")
+    print(f"  wake word:  {health['wake_word']}")
+    print(f"  last heard: {health.get('last_heard') or '<nothing transcribed yet>'}")
+    print(f"  RMS:        {health.get('input_rms', 0.0):.5f}")
+    print(f"  threshold:  {health.get('input_threshold', 0.0):.5f}")
+    print(f"  output:     {health['output_backend']}")
+    print(f"  speaker:    {health['output_available']}")
+    if health.get("input_error"):
+        print(f"  input err:  {health['input_error']}")
+    if health.get("output_error"):
+        print(f"  output err: {health['output_error']}")
+    if health.get("last_error"):
+        print(f"  manager err:{health['last_error']}")
+    print()
+
+
 def main() -> None:
-    """Webster entry point."""
     launcher = Launcher()
 
     try:
@@ -20,19 +39,15 @@ def main() -> None:
         print("=" * 60)
         print()
 
-        # Launcher.start() already starts the hands-free voice loop after
-        # wiring the AI processor. Do not start it a second time here.
         launcher.start()
-
         application = launcher.application
         voice_health = launcher.voice_manager.health()
-        voice_started = voice_health["voice_loop_running"]
 
         print("Webster initialized successfully.")
-        if voice_started:
+        if voice_health["voice_loop_running"]:
             print("Voice mode: ACTIVE — say 'Webster' to wake me.")
         else:
-            print("Voice mode: unavailable — use 'voice' for diagnostics.")
+            print("Voice mode: unavailable — type 'voice' for diagnostics.")
         print()
         print("WEBSTER CHAT MODE")
         print("Type 'help' for commands.")
@@ -41,12 +56,10 @@ def main() -> None:
 
         while True:
             command = input("webster> ").strip()
-
             if not command:
                 continue
 
             lower = command.lower()
-
             if lower in ("exit", "quit"):
                 break
 
@@ -58,30 +71,43 @@ def main() -> None:
                 print("status")
                 print("health")
                 print("voice")
+                print("voice devices")
+                print("voice test")
                 print("restart")
                 print("exit")
                 print()
                 continue
 
             if lower == "voice":
-                health = launcher.voice_manager.health()
+                _print_voice_status(launcher)
+                continue
+
+            if lower == "voice devices":
+                devices = launcher.voice_manager.devices()
                 print()
-                print("Voice status:")
-                print(f"  loop:       {health['voice_loop_running']}")
-                print(f"  input:      {health['input_backend']}")
-                print(f"  available:  {health['input_available']}")
-                print(f"  listening:  {health['listening']}")
-                print(f"  wake word:  {health['wake_word']}")
-                print(f"  last heard: {health.get('last_heard') or '<nothing transcribed yet>'}")
-                print(f"  output:     {health['output_backend']}")
-                print(f"  speaker:    {health['output_available']}")
-                if health.get("input_error"):
-                    print(f"  input err:  {health['input_error']}")
-                if health.get("output_error"):
-                    print(f"  output err: {health['output_error']}")
-                if health.get("last_error"):
-                    print(f"  manager err:{health['last_error']}")
+                if not devices:
+                    print("No microphone input devices were found.")
+                else:
+                    print("Microphone devices:")
+                    for device in devices:
+                        print(
+                            f"  [{device['index']}] {device['name']} "
+                            f"(inputs={device['inputs']}, "
+                            f"rate={device['samplerate']})"
+                        )
                 print()
+                continue
+
+            if lower == "voice test":
+                print()
+                print("Speak now. Say a short sentence...")
+                text = launcher.voice_manager.listen(ignore_wake_word=True)
+                if text:
+                    print(f"[VOICE TEST] You: {text}")
+                    print("[VOICE TEST] Microphone + Whisper are working.")
+                else:
+                    print("[VOICE TEST] No speech was transcribed.")
+                    _print_voice_status(launcher)
                 continue
 
             if lower == "status":
