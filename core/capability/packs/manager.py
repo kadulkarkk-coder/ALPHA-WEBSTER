@@ -2,13 +2,14 @@
 Webster Alpha
 
 Capability Pack Manager
-Sprint 30.8
+Sprint 30.12
 """
 
 from __future__ import annotations
 
 from typing import Iterable
 
+from core.capability.packs.events import CapabilityPackEventBus, PackEventType
 from core.capability.packs.manifest import (
     CapabilityPackManifest,
     CapabilityPackManifestRegistry,
@@ -19,13 +20,14 @@ from core.capability.registry import CapabilityRegistry
 
 
 class CapabilityPackManager:
-    """Manage capability-pack lifecycle with transactional loading."""
+    """Manage capability-pack lifecycle with validation, rollback and events."""
 
     def __init__(
         self,
         registry: CapabilityRegistry,
         manifest_registry: CapabilityPackManifestRegistry | None = None,
         validator: CapabilityPackValidator | None = None,
+        event_bus: CapabilityPackEventBus | None = None,
     ) -> None:
         if registry is None:
             raise ValueError("Capability registry cannot be None.")
@@ -33,6 +35,7 @@ class CapabilityPackManager:
         self.registry = registry
         self.manifests = manifest_registry or CapabilityPackManifestRegistry()
         self.validator = validator or CapabilityPackValidator()
+        self.events = event_bus or CapabilityPackEventBus()
         self._packs: dict[str, CapabilityPack] = {}
         self._loaded: set[str] = set()
 
@@ -42,16 +45,13 @@ class CapabilityPackManager:
 
     @property
     def loaded_packs(self) -> tuple[CapabilityPack, ...]:
-        return tuple(
-            self._packs[name] for name in self._packs if name in self._loaded
-        )
+        return tuple(self._packs[name] for name in self._packs if name in self._loaded)
 
     def add(self, pack: CapabilityPack) -> CapabilityPack:
         self._validate_pack(pack)
         key = self._key(pack)
         if key in self._packs:
             raise ValueError(f"Capability pack '{pack.name}' is already registered.")
-
         self._packs[key] = pack
         try:
             self._ensure_manifest(pack)
@@ -61,6 +61,7 @@ class CapabilityPackManager:
             if self.manifests.get(pack.name) is not None:
                 self.manifests.remove(pack.name)
             raise
+        self.events.emit(PackEventType.REGISTERED, pack.name)
         return pack
 
     def add_many(self, packs: Iterable[CapabilityPack]) -> tuple[CapabilityPack, ...]:
@@ -96,10 +97,7 @@ class CapabilityPackManager:
             raise
         return result
 
-    def register_manifests(
-        self,
-        manifests: Iterable[CapabilityPackManifest],
-    ) -> tuple[CapabilityPackManifest, ...]:
+    def register_manifests(self, manifests: Iterable[CapabilityPackManifest]) -> tuple[CapabilityPackManifest, ...]:
         added = self.manifests.add_many(manifests)
         try:
             self.validate_or_raise()
@@ -116,7 +114,7 @@ class CapabilityPackManager:
         return self.validator.validate_or_raise(self.packs, self.manifests)
 
     def load(self, name: str) -> CapabilityPack:
-        """Load one pack transactionally."""
+        """Load one pack transactionally and emit lifecycle events."""
         key = self._normalize_name(name)
         pack = self._packs.get(key)
         if pack is None:
@@ -132,21 +130,11 @@ class CapabilityPackManager:
         return self._load_transaction((pack,))[0]
 
     def load_all(self) -> tuple[CapabilityPack, ...]:
-        """Load all enabled packs as one transaction.
-
-        If any pack fails during registration, every pack loaded by this
-        operation is rolled back in reverse order and newly registered
-        capabilities are removed from the registry.
-        """
+        """Load all enabled packs as one validated transaction."""
         result = self.validate_or_raise()
         ordered_names = result.load_order
-
         if not ordered_names:
-            ordered_names = tuple(
-                pack.name
-                for pack in self._packs.values()
-                if pack.enabled
-            )
+            ordered_names = tuple(pack.name for pack in self._packs.values() if pack.enabled)
 
         packs = tuple(
             self._packs[name.strip().lower()]
@@ -163,8 +151,14 @@ class CapabilityPackManager:
         if key not in self._loaded:
             return pack
 
-        pack.unregister(self.registry)
+        self.events.emit(PackEventType.UNLOAD_STARTED, pack.name)
+        try:
+            pack.unregister(self.registry)
+        except Exception as exc:
+            self.events.emit(PackEventType.UNLOAD_FAILED, pack.name, str(exc))
+            raise
         self._loaded.remove(key)
+        self.events.emit(PackEventType.UNLOADED, pack.name)
         return pack
 
     def remove(self, name: str) -> CapabilityPack:
@@ -177,6 +171,7 @@ class CapabilityPackManager:
         del self._packs[key]
         if self.manifests.get(name) is not None:
             self.manifests.remove(name)
+        self.events.emit(PackEventType.REMOVED, pack.name)
         return pack
 
     def is_registered(self, name: str) -> bool:
@@ -194,39 +189,38 @@ class CapabilityPackManager:
     def manifest_metadata(self) -> tuple[dict[str, object], ...]:
         return self.manifests.metadata()
 
-    def _load_transaction(
-        self,
-        packs: tuple[CapabilityPack, ...],
-    ) -> tuple[CapabilityPack, ...]:
+    def _load_transaction(self, packs: tuple[CapabilityPack, ...]) -> tuple[CapabilityPack, ...]:
         if not packs:
             return ()
 
         registry_before = set(self.registry.names())
         loaded_now: list[CapabilityPack] = []
+        current: CapabilityPack | None = None
 
         try:
             for pack in packs:
                 key = self._key(pack)
                 if key in self._loaded:
                     continue
+                current = pack
+                self.events.emit(PackEventType.LOAD_STARTED, pack.name)
                 pack.register(self.registry)
                 self._loaded.add(key)
                 loaded_now.append(pack)
+                self.events.emit(PackEventType.LOADED, pack.name)
         except Exception as exc:
-            rollback_errors: list[str] = []
+            if current is not None:
+                self.events.emit(PackEventType.LOAD_FAILED, current.name, str(exc))
 
+            rollback_errors: list[str] = []
             for pack in reversed(loaded_now):
                 try:
                     pack.unregister(self.registry)
                 except Exception as rollback_exc:
-                    rollback_errors.append(
-                        f"{pack.name}: {rollback_exc}"
-                    )
+                    rollback_errors.append(f"{pack.name}: {rollback_exc}")
                 finally:
                     self._loaded.discard(self._key(pack))
 
-            # CapabilityPack.register() may fail after partially registering
-            # capabilities. Restore the registry boundary defensively.
             for capability_name in tuple(self.registry.names()):
                 if capability_name not in registry_before:
                     self.registry.unregister(capability_name)
@@ -237,9 +231,9 @@ class CapabilityPackManager:
                     + "; ".join(rollback_errors)
                 ) from exc
 
+            failed_name = current.name if current is not None else packs[0].name
             raise RuntimeError(
-                f"Capability pack load failed for '{loaded_now[-1].name if loaded_now else packs[0].name}'; "
-                "transaction rolled back."
+                f"Capability pack load failed for '{failed_name}'; transaction rolled back."
             ) from exc
 
         return tuple(loaded_now)
@@ -282,7 +276,4 @@ class CapabilityPackManager:
         return len(self._packs)
 
     def __repr__(self) -> str:
-        return (
-            f"CapabilityPackManager(packs={len(self._packs)}, "
-            f"loaded={len(self._loaded)})"
-        )
+        return f"CapabilityPackManager(packs={len(self._packs)}, loaded={len(self._loaded)})"
