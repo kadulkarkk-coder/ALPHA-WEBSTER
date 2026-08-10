@@ -2,31 +2,37 @@
 Webster Alpha
 
 Capability Pack Manager
-Sprint 30.5
+Sprint 30.7
 """
 
 from __future__ import annotations
 
 from typing import Iterable
 
-from core.capability.packs.manifest import CapabilityPackManifest, CapabilityPackManifestRegistry
+from core.capability.packs.manifest import (
+    CapabilityPackManifest,
+    CapabilityPackManifestRegistry,
+)
 from core.capability.packs.pack import CapabilityPack
+from core.capability.packs.validation import CapabilityPackValidator, PackValidationResult
 from core.capability.registry import CapabilityRegistry
 
 
 class CapabilityPackManager:
-    """Manage capability-pack lifecycle using optional declarative manifests."""
+    """Manage capability-pack lifecycle with manifest validation enforced."""
 
     def __init__(
         self,
         registry: CapabilityRegistry,
         manifest_registry: CapabilityPackManifestRegistry | None = None,
+        validator: CapabilityPackValidator | None = None,
     ) -> None:
         if registry is None:
             raise ValueError("Capability registry cannot be None.")
 
         self.registry = registry
         self.manifests = manifest_registry or CapabilityPackManifestRegistry()
+        self.validator = validator or CapabilityPackValidator()
         self._packs: dict[str, CapabilityPack] = {}
         self._loaded: set[str] = set()
 
@@ -44,7 +50,12 @@ class CapabilityPackManager:
         if key in self._packs:
             raise ValueError(f"Capability pack '{pack.name}' is already registered.")
         self._packs[key] = pack
-        self._ensure_manifest(pack)
+        try:
+            self._ensure_manifest(pack)
+            self.validate()
+        except Exception:
+            del self._packs[key]
+            raise
         return pack
 
     def add_many(self, packs: Iterable[CapabilityPack]) -> tuple[CapabilityPack, ...]:
@@ -57,19 +68,48 @@ class CapabilityPackManager:
                 raise ValueError(f"Capability pack '{pack.name}' is already registered.")
             keys.add(key)
 
-        for pack in pending:
-            self.add(pack)
-        return tuple(pending)
+        added: list[CapabilityPack] = []
+        try:
+            for pack in pending:
+                self.add(pack)
+                added.append(pack)
+        except Exception:
+            for pack in added:
+                key = self._key(pack)
+                self._packs.pop(key, None)
+                self.manifests.remove(pack.name)
+            raise
+        return tuple(added)
 
     def register_manifest(self, manifest: CapabilityPackManifest) -> CapabilityPackManifest:
-        """Register declarative metadata before its pack is instantiated."""
-        return self.manifests.add(manifest)
+        result = self.manifests.add(manifest)
+        try:
+            self.validate()
+        except Exception:
+            self.manifests.remove(manifest.name)
+            raise
+        return result
 
     def register_manifests(
         self,
         manifests: Iterable[CapabilityPackManifest],
     ) -> tuple[CapabilityPackManifest, ...]:
-        return self.manifests.add_many(manifests)
+        added = self.manifests.add_many(manifests)
+        try:
+            self.validate()
+        except Exception:
+            for manifest in added:
+                self.manifests.remove(manifest.name)
+            raise
+        return added
+
+    def validate(self) -> PackValidationResult:
+        """Validate the complete pack/manifest state."""
+        return self.validator.validate(self.packs, self.manifests)
+
+    def validate_or_raise(self) -> PackValidationResult:
+        """Raise before any lifecycle operation can use invalid state."""
+        return self.validator.validate_or_raise(self.packs, self.manifests)
 
     def load(self, name: str) -> CapabilityPack:
         key = self._normalize_name(name)
@@ -78,6 +118,8 @@ class CapabilityPackManager:
             raise KeyError(f"Capability pack '{name}' is not registered.")
         if key in self._loaded:
             return pack
+
+        self.validate_or_raise()
 
         manifest = self.manifests.get(key)
         if manifest is not None and not manifest.enabled:
@@ -90,20 +132,18 @@ class CapabilityPackManager:
         return pack
 
     def load_all(self) -> tuple[CapabilityPack, ...]:
-        """Load packs in manifest dependency/priority order when available."""
+        """Validate first, then load packs in manifest dependency order."""
+        self.validate_or_raise()
+
         if self.manifests:
             ordered = self.manifests.load_order()
-            loaded: list[CapabilityPack] = []
-            for manifest in ordered:
-                pack = self._packs.get(manifest.key)
-                if pack is None:
-                    raise KeyError(
-                        f"Manifest '{manifest.name}' has no registered capability pack."
-                    )
-                loaded.append(self.load(manifest.name))
-            return tuple(loaded)
+            return tuple(self.load(manifest.name) for manifest in ordered)
 
-        return tuple(self.load(pack.name) for pack in self._packs.values() if pack.enabled)
+        return tuple(
+            self.load(pack.name)
+            for pack in self._packs.values()
+            if pack.enabled
+        )
 
     def unload(self, name: str) -> CapabilityPack:
         key = self._normalize_name(name)
@@ -125,6 +165,8 @@ class CapabilityPackManager:
         if key in self._loaded:
             self.unload(name)
         del self._packs[key]
+        if self.manifests.get(name) is not None:
+            self.manifests.remove(name)
         return pack
 
     def is_registered(self, name: str) -> bool:
