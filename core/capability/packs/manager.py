@@ -2,87 +2,86 @@
 Webster Alpha
 
 Capability Pack Manager
-Sprint 30.2
+Sprint 30.5
 """
 
 from __future__ import annotations
 
 from typing import Iterable
 
+from core.capability.packs.manifest import CapabilityPackManifest, CapabilityPackManifestRegistry
 from core.capability.packs.pack import CapabilityPack
 from core.capability.registry import CapabilityRegistry
 
 
 class CapabilityPackManager:
-    """Manage the lifecycle of Webster capability packs.
+    """Manage capability-pack lifecycle using optional declarative manifests."""
 
-    The manager owns pack lifecycle only. Capability registration remains
-    delegated to each pack and the registry remains the source of truth for
-    individual capabilities.
-    """
-
-    def __init__(self, registry: CapabilityRegistry) -> None:
+    def __init__(
+        self,
+        registry: CapabilityRegistry,
+        manifest_registry: CapabilityPackManifestRegistry | None = None,
+    ) -> None:
         if registry is None:
             raise ValueError("Capability registry cannot be None.")
 
         self.registry = registry
+        self.manifests = manifest_registry or CapabilityPackManifestRegistry()
         self._packs: dict[str, CapabilityPack] = {}
         self._loaded: set[str] = set()
 
     @property
     def packs(self) -> tuple[CapabilityPack, ...]:
-        """Return all known packs in registration order."""
         return tuple(self._packs.values())
 
     @property
     def loaded_packs(self) -> tuple[CapabilityPack, ...]:
-        """Return currently loaded packs."""
-        return tuple(
-            self._packs[name]
-            for name in self._packs
-            if name in self._loaded
-        )
+        return tuple(self._packs[name] for name in self._packs if name in self._loaded)
 
     def add(self, pack: CapabilityPack) -> CapabilityPack:
-        """Add a pack without loading it."""
         self._validate_pack(pack)
         key = self._key(pack)
-
         if key in self._packs:
             raise ValueError(f"Capability pack '{pack.name}' is already registered.")
-
         self._packs[key] = pack
+        self._ensure_manifest(pack)
         return pack
 
     def add_many(self, packs: Iterable[CapabilityPack]) -> tuple[CapabilityPack, ...]:
-        """Add multiple packs atomically with respect to duplicate names."""
-        added: list[CapabilityPack] = []
-        pending: set[str] = set()
-
-        for pack in packs:
+        pending = list(packs)
+        keys: set[str] = set()
+        for pack in pending:
             self._validate_pack(pack)
             key = self._key(pack)
-            if key in self._packs or key in pending:
+            if key in self._packs or key in keys:
                 raise ValueError(f"Capability pack '{pack.name}' is already registered.")
-            pending.add(key)
-            added.append(pack)
+            keys.add(key)
 
-        for pack in added:
-            self._packs[self._key(pack)] = pack
+        for pack in pending:
+            self.add(pack)
+        return tuple(pending)
 
-        return tuple(added)
+    def register_manifest(self, manifest: CapabilityPackManifest) -> CapabilityPackManifest:
+        """Register declarative metadata before its pack is instantiated."""
+        return self.manifests.add(manifest)
+
+    def register_manifests(
+        self,
+        manifests: Iterable[CapabilityPackManifest],
+    ) -> tuple[CapabilityPackManifest, ...]:
+        return self.manifests.add_many(manifests)
 
     def load(self, name: str) -> CapabilityPack:
-        """Load and register a pack by name."""
         key = self._normalize_name(name)
         pack = self._packs.get(key)
-
         if pack is None:
             raise KeyError(f"Capability pack '{name}' is not registered.")
-
         if key in self._loaded:
             return pack
 
+        manifest = self.manifests.get(key)
+        if manifest is not None and not manifest.enabled:
+            return pack
         if not pack.enabled:
             return pack
 
@@ -91,21 +90,26 @@ class CapabilityPackManager:
         return pack
 
     def load_all(self) -> tuple[CapabilityPack, ...]:
-        """Load every enabled pack."""
-        loaded: list[CapabilityPack] = []
-        for pack in self._packs.values():
-            if pack.enabled:
-                loaded.append(self.load(pack.name))
-        return tuple(loaded)
+        """Load packs in manifest dependency/priority order when available."""
+        if self.manifests:
+            ordered = self.manifests.load_order()
+            loaded: list[CapabilityPack] = []
+            for manifest in ordered:
+                pack = self._packs.get(manifest.key)
+                if pack is None:
+                    raise KeyError(
+                        f"Manifest '{manifest.name}' has no registered capability pack."
+                    )
+                loaded.append(self.load(manifest.name))
+            return tuple(loaded)
+
+        return tuple(self.load(pack.name) for pack in self._packs.values() if pack.enabled)
 
     def unload(self, name: str) -> CapabilityPack:
-        """Unload a loaded pack using its optional cleanup hook."""
         key = self._normalize_name(name)
         pack = self._packs.get(key)
-
         if pack is None:
             raise KeyError(f"Capability pack '{name}' is not registered.")
-
         if key not in self._loaded:
             return pack
 
@@ -114,16 +118,12 @@ class CapabilityPackManager:
         return pack
 
     def remove(self, name: str) -> CapabilityPack:
-        """Unload and forget a pack."""
         key = self._normalize_name(name)
         pack = self._packs.get(key)
-
         if pack is None:
             raise KeyError(f"Capability pack '{name}' is not registered.")
-
         if key in self._loaded:
             self.unload(name)
-
         del self._packs[key]
         return pack
 
@@ -137,14 +137,28 @@ class CapabilityPackManager:
         return self._packs.get(self._normalize_name(name))
 
     def metadata(self) -> tuple[dict[str, object], ...]:
-        """Return metadata for all known packs."""
         return tuple(pack.metadata() for pack in self._packs.values())
+
+    def manifest_metadata(self) -> tuple[dict[str, object], ...]:
+        return self.manifests.metadata()
+
+    def _ensure_manifest(self, pack: CapabilityPack) -> None:
+        if self.manifests.get(pack.name) is not None:
+            return
+        self.manifests.add(
+            CapabilityPackManifest(
+                name=pack.name,
+                module=pack.__class__.__module__,
+                class_name=pack.__class__.__qualname__,
+                version=pack.version,
+                enabled=pack.enabled,
+            )
+        )
 
     @staticmethod
     def _validate_pack(pack: CapabilityPack) -> None:
         if not isinstance(pack, CapabilityPack):
             raise TypeError("Expected a CapabilityPack instance.")
-
         if not str(pack.name).strip():
             raise ValueError("Capability pack name cannot be empty.")
 
@@ -166,7 +180,4 @@ class CapabilityPackManager:
         return len(self._packs)
 
     def __repr__(self) -> str:
-        return (
-            f"CapabilityPackManager(packs={len(self._packs)}, "
-            f"loaded={len(self._loaded)})"
-        )
+        return f"CapabilityPackManager(packs={len(self._packs)}, loaded={len(self._loaded)})"
