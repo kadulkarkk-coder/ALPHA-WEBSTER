@@ -1,4 +1,4 @@
-# Webster Alpha core + voice dependencies
+# Webster Alpha core + voice + vision dependencies
 # Voice input: sounddevice captures the microphone; faster-whisper performs local STT.
 # PyAudio is intentionally NOT required for the Python 3.14 voice stack.
 google-genai>=1.0.0,<2
@@ -8,3 +8,4 @@ sounddevice>=0.5.5,<1
 numpy>=2.0,<3
 faster-whisper>=1.2.1,<2
 pyttsx3>=2.99,<3
+Pillow>=11.0.0,<12
