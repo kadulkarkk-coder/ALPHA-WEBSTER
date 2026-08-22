@@ -45,21 +45,26 @@ class AIPlanningBridge:
         return self._capabilities
 
     def decide(self, intent: Intent) -> PlanningDecision:
-        """Determine whether an intent has enough information for planning."""
-        action = intent.action
+        """Determine whether an intent contains enough information for planning."""
+        action = (intent.action or "").strip().lower()
         if action and self._capabilities.exists(action):
             return PlanningDecision(True, "registered capability", action)
 
         if action:
             return PlanningDecision(False, f"capability '{action}' is not registered", action)
 
+        # An action intent with no resolved capability is not a planning goal.
+        # Sending it to the planner creates a valid-looking but empty plan and
+        # hides the real routing failure behind "Plan contains no steps".
         if intent.is_action:
-            return PlanningDecision(True, "action intent requires planner discovery")
+            return PlanningDecision(
+                False,
+                "I couldn't determine an executable capability for that request.",
+            )
 
         return PlanningDecision(False, "intent is not actionable")
 
     def build_plan(self, message: str, intent: Intent) -> Plan:
-        """Build a validated plan from an AI request."""
         decision = self.decide(intent)
         if not decision.executable:
             raise ValueError(decision.reason)
@@ -67,7 +72,6 @@ class AIPlanningBridge:
         return self._planning.plan_goal(goal)
 
     def execute(self, message: str, intent: Intent) -> Any:
-        """Build and execute a plan, preserving the planning engine's verification path."""
         plan = self.build_plan(message, intent)
         return self._planning.execute_plan(plan)
 
