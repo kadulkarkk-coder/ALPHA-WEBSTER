@@ -7,6 +7,8 @@ from core.ai.response import AIResponse
 from core.ai.router import IntentRouter
 from core.ai.goal_builder import GoalBuilder
 from core.ai.response_builder import ResponseBuilder
+from core.ai.planning_bridge import AIPlanningBridge
+from core.ai.execution_coordinator import AIExecutionCoordinator
 from core.provider.manager import ProviderManager
 from core.planning.engine import PlanningEngine
 from core.capability.engine import CapabilityEngine
@@ -15,11 +17,7 @@ from core.conversation.manager import ConversationManager
 
 
 class AIEngine:
-    """Webster's intelligence layer.
-
-    Deterministic computer commands are handled by CommandEngine first.
-    The LLM is used for conversation and questions, not for basic tool routing.
-    """
+    """Webster's intelligence layer with integrated planning and execution."""
 
     def __init__(
         self,
@@ -42,6 +40,12 @@ class AIEngine:
         self.goal_builder = goal_builder
         self.response_builder = response_builder
         self.command_engine = command_engine
+        self.planning_bridge = AIPlanningBridge(
+            planning_engine=planning_engine,
+            capability_engine=capability_engine,
+            goal_builder=goal_builder,
+        )
+        self.execution_coordinator = AIExecutionCoordinator(self.planning_bridge)
         self._initialized = False
         self._pending_confirmation: str | None = None
 
@@ -71,6 +75,21 @@ class AIEngine:
         request = AIRequest(prompt=message, context=self.conversation_manager.context)
         return self.provider_manager.generate(request)
 
+    def _execute_planned_intent(self, message: str, intent) -> AIResponse:
+        """Route an actionable request through planning instead of failing immediately."""
+        try:
+            result = self.execution_coordinator.execute(message, intent)
+            success = getattr(result, "success", True)
+            if success:
+                text = getattr(result, "text", None) or getattr(result, "message", None)
+                if not text:
+                    text = f"Completed planned action: {intent.action or intent.category or 'task'}."
+                return AIResponse(content=str(text), success=True)
+            error = getattr(result, "error", None) or getattr(result, "message", None) or "Planned execution failed."
+            return AIResponse.error(str(error))
+        except Exception as error:
+            return AIResponse.error(str(error))
+
     def process(self, message: str) -> AIResponse:
         if not self._initialized:
             self.initialize()
@@ -95,8 +114,6 @@ class AIEngine:
 
         intent = self.router.route(message)
 
-        # Part 1: execute every recognized, registered single command directly.
-        # This completely removes the empty-plan failure from ordinary commands.
         if self.command_engine is not None and self.command_engine.can_handle(message):
             if intent.action == "delete_file" and "confirmed" not in message.lower():
                 self._pending_confirmation = message
@@ -110,17 +127,10 @@ class AIEngine:
                     response = AIResponse(content=text, success=True)
                 except Exception as error:
                     response = AIResponse.error(str(error))
+        elif intent.is_action:
+            response = self._execute_planned_intent(message, intent)
         elif intent.is_chat or intent.is_question:
             response = self._chat_with_provider(message)
-        elif intent.is_action:
-            # Don't manufacture an empty plan. Explain that no executable
-            # capability is currently registered for this command.
-            action = intent.action or "unknown"
-            available = ", ".join(self.capability_engine.names())
-            response = AIResponse.error(
-                f"No registered capability can execute this command (requested: {action}). "
-                f"Available capabilities: {available or 'none'}."
-            )
         else:
             response = self._chat_with_provider(message)
 
@@ -152,6 +162,8 @@ class AIEngine:
             "provider_manager": self.provider_manager.health(),
             "planning_engine": self.planning_engine.health(),
             "capability_engine": self.capability_engine.health(),
+            "planning_bridge": self.planning_bridge.health(),
+            "execution_coordinator": self.execution_coordinator.health(),
             "conversation_manager": self.conversation_manager.health(),
             "memory_manager": self.memory_manager.health(),
         }
