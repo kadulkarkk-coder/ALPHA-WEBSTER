@@ -12,13 +12,23 @@ from .task import Task
 
 
 class TaskDecomposer:
-    """Convert analyzed goals into executable tasks.
+    """Convert analyzed goals into executable tasks."""
 
-    The command engine performs the authoritative capability lookup.  Task
-    creation therefore must not perform a second registry lookup: doing so
-    created a false "not registered in the task registry" failure even when
-    the capability engine had already verified the capability.
-    """
+    _SITE_ALIASES = {
+        "google": "google.com",
+        "youtube": "youtube.com",
+        "github": "github.com",
+        "facebook": "facebook.com",
+        "instagram": "instagram.com",
+        "twitter": "x.com",
+        "x": "x.com",
+        "reddit": "reddit.com",
+        "wikipedia": "wikipedia.org",
+        "amazon": "amazon.com",
+        "gmail": "gmail.com",
+        "google maps": "maps.google.com",
+        "maps": "maps.google.com",
+    }
 
     def __init__(self, registry: CapabilityRegistry | None = None) -> None:
         self._registry = registry
@@ -31,12 +41,6 @@ class TaskDecomposer:
         return self._registry is None or self._registry.exists(capability)
 
     def create_task(self, goal: Goal, capability: str) -> Task:
-        """Create one task for a capability already selected by the caller.
-
-        Capability existence is deliberately not re-checked here.  The
-        authoritative check belongs to CapabilityEngine/CapabilityRegistry;
-        repeating it here can desynchronise command routing and task creation.
-        """
         goal.validate()
         capability = capability.strip().lower()
         if not capability:
@@ -74,7 +78,9 @@ class TaskDecomposer:
             "copy_file": "Copy a file", "delete_file": "Delete a file",
             "list_directory": "List directory contents", "search_files": "Search filesystem entries",
             "open_url": "Open a URL", "refresh": "Refresh the browser",
-            "back": "Navigate browser back", "power": "Perform a system power action",
+            "browser_back": "Navigate browser back", "power": "Perform a system power action",
+            "vision_enable": "Enable Webster vision", "vision_disable": "Disable Webster vision",
+            "vision_status": "Check vision status", "vision_screen": "Capture and inspect the screen",
         }
         return f"{names.get(capability, capability)} for: {objective}"
 
@@ -82,11 +88,17 @@ class TaskDecomposer:
         text = objective.strip()
         lower = text.lower()
 
+        if capability in {"vision_enable", "vision_disable", "vision_status", "vision_screen"}:
+            return {}
+
         if capability in {"create_folder", "create_file"}:
             target = self._quoted_or_tail(text, ("called", "named"))
             if not target:
                 marker = "folder" if capability == "create_folder" else "file"
                 target = self._after_word(text, marker)
+            if not target and capability == "create_file":
+                match = re.search(r"\b(?:create|make)\s+(?:a\s+)?([^\s]+\.[a-z0-9]{1,8})\b", text, re.I)
+                target = match.group(1) if match else None
             return {"path": target or ("NewFolder" if capability == "create_folder" else "new_file.txt")}
 
         if capability == "write_file":
@@ -95,7 +107,13 @@ class TaskDecomposer:
             return {"path": path, "content": content}
 
         if capability == "read_file":
-            return {"path": self._quoted_or_tail(text, ("file", "called", "named")) or self._after_word(text, "file") or text}
+            target = self._quoted_or_tail(text, ("file", "called", "named"))
+            if not target:
+                target = self._after_word(text, "file")
+            if not target:
+                match = re.search(r"\b(?:read|view|show|open)\s+(?:the\s+)?(.+?\.[a-z0-9]{1,8})\s*$", text, re.I)
+                target = match.group(1).strip(" .\"'") if match else None
+            return {"path": target or text}
 
         if capability == "rename_file":
             source, destination = self._extract_from_to(text)
@@ -106,8 +124,11 @@ class TaskDecomposer:
             return {"source": source or text, "destination": destination or "."}
 
         if capability == "delete_file":
-            target = self._quoted_or_tail(text, ("file", "folder", "called", "named")) or text
-            return {"path": target, "require_confirmation": True, "confirmed": "confirmed" in lower}
+            target = self._quoted_or_tail(text, ("file", "folder", "called", "named"))
+            if not target:
+                match = re.search(r"\b(?:delete|remove)\s+(?:the\s+)?(?:file\s+)?(.+?)(?:\s+confirmed)?\s*$", text, re.I)
+                target = match.group(1).strip(" .\"'") if match else None
+            return {"path": target or text, "require_confirmation": True, "confirmed": "confirmed" in lower}
 
         if capability == "list_directory":
             path = self._quoted_or_tail(text, ("in", "inside", "folder", "directory"))
@@ -126,7 +147,7 @@ class TaskDecomposer:
                     url = match.group(0).rstrip(".,!?)]}")
                 else:
                     candidate = re.sub(r"^\s*(?:open|browse|visit|go to)\s+", "", text, flags=re.I).strip()
-                    url = candidate.replace(" ", "")
+                    url = self._SITE_ALIASES.get(candidate.lower(), candidate.replace(" ", ""))
             if not url.startswith(("http://", "https://")):
                 url = "https://" + url
             return {"url": url}
@@ -135,6 +156,9 @@ class TaskDecomposer:
             for action in ("shutdown", "restart", "sleep", "hibernate", "lock", "logout"):
                 if action in lower:
                     return {"action": action}
+
+        if capability == "browser_back":
+            return {}
 
         return {}
 
