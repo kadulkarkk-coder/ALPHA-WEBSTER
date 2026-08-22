@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from .goal import Goal
@@ -18,9 +19,17 @@ class GoalAnalysis:
 
 
 class GoalAnalyzer:
-    """Deterministically maps natural-language goals to real capabilities."""
+    """Deterministically maps natural-language goals to real capabilities.
+
+    This is intentionally kept in sync with IntentRouter.  The planner is a
+    fallback for multi-step requests, not a second unrelated command parser.
+    """
 
     _RULES = (
+        (("activate vision", "enable vision", "turn on vision", "start vision"), "vision", ("vision_enable",)),
+        (("deactivate vision", "disable vision", "turn off vision", "stop vision"), "vision", ("vision_disable",)),
+        (("vision status", "vision state", "vision health", "visual mode status"), "vision", ("vision_status",)),
+        (("can you see my screen", "see my screen", "look at my screen", "view my screen", "analyze my screen", "screenshot", "screen capture"), "vision", ("vision_screen",)),
         (("create folder", "make folder", "mkdir"), "filesystem", ("create_folder",)),
         (("create file", "new file", "make file"), "filesystem", ("create_file",)),
         (("write file", "save file"), "filesystem", ("write_file",)),
@@ -33,8 +42,13 @@ class GoalAnalyzer:
         (("search files", "find files", "find all", "search folder"), "filesystem", ("search_files",)),
         (("open url", "open website", "open http", "open https", "go to", "visit", "open chatgpt", "open google"), "internet", ("open_url",)),
         (("refresh", "reload"), "internet", ("refresh",)),
-        (("back", "go back"), "internet", ("back",)),
+        (("back", "go back"), "internet", ("browser_back",)),
         (("shutdown", "restart", "sleep", "hibernate", "lock", "logout"), "system", ("power",)),
+    )
+
+    _FILE_EXTENSION = re.compile(
+        r"\b(?:delete|remove|read|view|show|open)\s+(?:the\s+)?(?:file\s+)?[\w .()\-]+\.[a-z0-9]{1,8}\b",
+        re.IGNORECASE,
     )
 
     def analyze(self, goal: Goal) -> GoalAnalysis:
@@ -51,6 +65,10 @@ class GoalAnalyzer:
                     priority=goal.priority,
                     execution_strategy="sequential",
                 )
+
+        if self._FILE_EXTENSION.search(text):
+            capability = "delete_file" if re.search(r"\b(delete|remove)\b", text) else "read_file"
+            return GoalAnalysis("filesystem", (capability,), "low", 1, goal.priority, "sequential")
 
         if any(word in text for word in ("file", "files", "folder", "directory", "document")):
             return GoalAnalysis(
