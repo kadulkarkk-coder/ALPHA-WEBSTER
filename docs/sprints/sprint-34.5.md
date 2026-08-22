@@ -17,6 +17,7 @@ Make the existing Webster core execute natural-language commands through the rea
   - `vision_disable`
   - `vision_status`
   - `vision_screen`
+- Added an optional Gemini multimodal provider for semantic screen analysis when `GEMINI_API_KEY` is configured.
 - Fixed the launcher import to use the actual `core.capability.file.delete` module.
 - Added vision status/diagnostics to the CLI.
 - Added integration tests for routing, planning arguments, URL aliases, and vision state.
@@ -50,7 +51,7 @@ Unknown action requests no longer become empty plans. They return a routing erro
 
 `activate vision` enables the shared vision manager. `vision status` reports the configured capture/analysis pipeline. `can you see my screen` captures the Windows desktop through the registered `vision_screen` capability.
 
-The repository currently has an analyzer abstraction and OCR abstraction but no built-in multimodal model provider. Screen capture is therefore functional independently of a multimodal provider; semantic visual descriptions require a provider to be injected later.
+When `GEMINI_API_KEY` is configured, the captured frame is also sent to the optional Gemini multimodal provider for a semantic visual description. Without a multimodal provider, screen capture still works and the analyzer falls back to the repository's OCR abstraction.
 
 ## Validation
 
