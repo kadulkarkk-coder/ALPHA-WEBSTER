@@ -8,7 +8,7 @@ from core.capability.browser.open_url import OpenUrlCapability
 from core.capability.browser.refresh import RefreshCapability
 from core.capability.file.create import CreateFileCapability
 from core.capability.file.create_folder import CreateFolderCapability
-from core.capability.file.delete_file import DeleteFileCapability
+from core.capability.file.delete import DeleteFileCapability
 from core.capability.file.rename import RenameFileCapability
 from core.capability.file.copy import CopyFileCapability
 from core.capability.file.move import MoveFileCapability
@@ -42,6 +42,16 @@ from core.provider.ollama import OllamaProvider
 from core.provider.manager import ProviderManager
 from core.voice.manager import VoiceManager
 from core.file.manager import FileManager
+from core.vision.analyzer import VisionAnalyzer
+from core.vision.capture import VisionCapture
+from core.vision.manager import VisionManager
+from core.vision.windows import WindowsScreenProvider
+from core.capability.vision.capabilities import (
+    VisionDisableCapability,
+    VisionEnableCapability,
+    VisionScreenCapability,
+    VisionStatusCapability,
+)
 
 
 class Launcher:
@@ -78,6 +88,13 @@ class Launcher:
         self.ai_engine = AIEngine(provider_manager=self.provider_manager, planning_engine=self.planning_engine, capability_engine=self.capability_engine, memory_manager=self.memory_manager, conversation_manager=self.conversation_manager, router=self.intent_router, goal_builder=self.goal_builder, response_builder=self.response_builder, command_engine=self.command_engine)
         self.voice_manager = VoiceManager()
         self.file_manager = FileManager()
+
+        self.vision_manager = VisionManager(
+            capture=VisionCapture(screen_provider=WindowsScreenProvider()),
+            analyzer=VisionAnalyzer(),
+            enabled=False,
+        )
+
         self._runtime.ai = self.ai_engine
         self._runtime.memory = self.memory_manager
         self._runtime.conversation = self.conversation_manager
@@ -106,7 +123,7 @@ class Launcher:
         self._initialized = True
 
     def _register_services(self) -> None:
-        services = {"provider_manager": self.provider_manager, "memory_manager": self.memory_manager, "conversation_manager": self.conversation_manager, "capability_engine": self.capability_engine, "planning_engine": self.planning_engine, "command_engine": self.command_engine, "ai_engine": self.ai_engine, "plugin_manager": self.plugin_manager, "event_bus": self.event_bus, "messaging_manager": self.messaging_manager, "voice_manager": self.voice_manager, "file_manager": self.file_manager}
+        services = {"provider_manager": self.provider_manager, "memory_manager": self.memory_manager, "conversation_manager": self.conversation_manager, "capability_engine": self.capability_engine, "planning_engine": self.planning_engine, "command_engine": self.command_engine, "ai_engine": self.ai_engine, "plugin_manager": self.plugin_manager, "event_bus": self.event_bus, "messaging_manager": self.messaging_manager, "voice_manager": self.voice_manager, "file_manager": self.file_manager, "vision_manager": self.vision_manager}
         for name, service in services.items(): self.service_registry.register(name, service)
 
     def _register_providers(self) -> None:
@@ -128,6 +145,10 @@ class Launcher:
                     SearchFilesCapability,
                 )
             ),
+            VisionEnableCapability(self.vision_manager),
+            VisionDisableCapability(self.vision_manager),
+            VisionStatusCapability(self.vision_manager),
+            VisionScreenCapability(self.vision_manager),
         ]
 
     def _register_capabilities(self) -> None:
@@ -139,13 +160,11 @@ class Launcher:
     def _ensure_core_capabilities(self) -> None:
         """Ensure required built-ins use their actual registry names."""
         self._register_capabilities()
-        # BackCapability's public registry name is ``browser_back``.
-        # ``back`` was previously checked here even though no capability
-        # registered that name, causing startup to fail before the CLI opened.
         required = {
             "open_url", "create_file", "create_folder", "delete_file",
             "rename_file", "copy_file", "move_file", "read_file", "write_file",
             "list_directory", "search_files", "refresh", "browser_back",
+            "vision_enable", "vision_disable", "vision_status", "vision_screen",
         }
         missing = sorted(name for name in required if not self.capability_engine.exists(name))
         if missing:
@@ -172,7 +191,8 @@ class Launcher:
         if not self._running: self.start()
         return self.voice_manager.start_voice_loop()
 
-    def stop_voice(self) -> None: self.voice_manager.stop_voice_loop()
+    def stop_voice(self) -> None:
+        self.voice_manager.stop_voice_loop()
 
     def shutdown(self) -> None:
         if not self._running: return
@@ -186,8 +206,7 @@ class Launcher:
     def is_running(self) -> bool: return self._running
     @property
     def is_initialized(self) -> bool: return self._initialized
-    def health(self) -> dict:
-        return {"initialized": self._initialized, "running": self._running, "runtime": self._runtime.health(), "providers": self.provider_manager.health(), "planning": self.planning_engine.health(), "commands": self.command_engine.health(), "capabilities": self.capability_engine.health(), "memory": self.memory_manager.health(), "conversation": self.conversation_manager.health(), "services": self.service_registry.health(), "plugins": self.plugin_manager.health(), "voice": self.voice_manager.health(), "files": self.file_manager.health()}
+    def health(self) -> dict: return {"initialized": self._initialized, "running": self._running, "runtime": self._runtime.health(), "providers": self.provider_manager.health(), "planning": self.planning_engine.health(), "commands": self.command_engine.health(), "capabilities": self.capability_engine.health(), "memory": self.memory_manager.health(), "conversation": self.conversation_manager.health(), "services": self.service_registry.health(), "plugins": self.plugin_manager.health(), "voice": self.voice_manager.health(), "vision": self.vision_manager.health(), "files": self.file_manager.health()}
     @property
     def service_count(self) -> int: return self.service_registry.service_count
     @property
@@ -210,6 +229,8 @@ class Launcher:
     def services(self): return self.service_registry
     @property
     def voice(self): return self.voice_manager
+    @property
+    def vision(self): return self.vision_manager
     @property
     def files(self): return self.file_manager
     @property
