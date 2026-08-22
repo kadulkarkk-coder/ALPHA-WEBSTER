@@ -44,6 +44,7 @@ from core.voice.manager import VoiceManager
 from core.file.manager import FileManager
 from core.vision.analyzer import VisionAnalyzer
 from core.vision.capture import VisionCapture
+from core.vision.gemini import GeminiVisionProvider
 from core.vision.manager import VisionManager
 from core.vision.windows import WindowsScreenProvider
 from core.capability.vision.capabilities import (
@@ -89,9 +90,10 @@ class Launcher:
         self.voice_manager = VoiceManager()
         self.file_manager = FileManager()
 
+        self.vision_provider = GeminiVisionProvider()
         self.vision_manager = VisionManager(
             capture=VisionCapture(screen_provider=WindowsScreenProvider()),
-            analyzer=VisionAnalyzer(),
+            analyzer=VisionAnalyzer(provider=self.vision_provider if self.vision_provider.available else None),
             enabled=False,
         )
 
